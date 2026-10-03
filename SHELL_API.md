@@ -43,7 +43,7 @@
 - `gameplay_started(metadata)`：开始一局。
 - `gameplay_paused(is_paused)`：暂停状态变化。
 - `judgement_made(judgement)`：Perfect/Great/Good/OK/Meh/Miss/Hold 结果，同时包含 `timing_error_ms`、`timing_text` 和 `health`。
-- `note_state_changed(note_index, note)`：单个音符变为 holding、completed、missed 或 broken。
+- `note_state_changed(note_index, note)`：单个音符变为 holding、completed、missed、hold_missed 或 broken。`hold_missed` 表示头部已漏按但本体/尾部尚未结束，仍需显示；`broken` 表示已按中的长键提前松开。两者都可以重新按住剩余部分，但 `hold_broken` 会保留，不能补回此前的 Miss/断连。
 - `progress_changed(progress, song_time_ms, duration_ms)`：播放进度变化。
 - `gameplay_finished(result)`：结算完成。
 - `personal_best_changed(best)`：当前谱面刷新本地最佳成绩。

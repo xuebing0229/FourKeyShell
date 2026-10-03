@@ -1427,13 +1427,11 @@ func _judge_lane_down(lane: int, forced_time_ms := -1.0e30) -> void:
 	if not playing or paused:
 		return
 	var now := _song_time_ms() if forced_time_ms < -1.0e20 else forced_time_ms
-	# osu!mania keeps a broken hold object alive until its tail. Re-pressing
-	# during the body restores the visual hold state, although the earlier break
-	# still caps the result. This also prevents the body from disappearing after
-	# an accidental release.
+	# Like osu!mania, both a missed head and an early release leave a live body
+	# that can be held again. Re-pressing does not erase the original miss/break.
 	for i in notes.size():
 		var broken_hold: Dictionary = notes[i]
-		if broken_hold.state == "broken" and broken_hold.lane == lane and now < float(broken_hold.end):
+		if (broken_hold.state == "broken" or broken_hold.state == "hold_missed") and broken_hold.lane == lane and now < float(broken_hold.end):
 			broken_hold.state = "holding"
 			notes[i] = broken_hold
 			note_state_changed.emit(i, broken_hold.duplicate())
@@ -1505,7 +1503,13 @@ func _update_note_states() -> void:
 	for i in notes.size():
 		var note: Dictionary = notes[i]
 		if note.state == "pending" and now > float(note.time) + miss_window_ms:
-			note.state = "missed"
+			# Judgement and visual lifetime are separate: missing the head must
+			# not remove the body/tail before their scheduled end.
+			if float(note.end) > float(note.time):
+				note.state = "hold_missed"
+				note.hold_broken = true
+			else:
+				note.state = "missed"
 			notes[i] = note
 			note_state_changed.emit(i, note.duplicate())
 			combo = 0
@@ -1515,6 +1519,11 @@ func _update_note_states() -> void:
 				_complete_hold(i)
 			else:
 				_break_hold(i)
+		elif (note.state == "hold_missed" or note.state == "broken") and now > float(note.end) + hold_release_window_ms:
+			# The miss/break was already recorded; only retire the visual now.
+			note.state = "missed"
+			notes[i] = note
+			note_state_changed.emit(i, note.duplicate())
 
 func _complete_hold(index: int) -> void:
 	var note: Dictionary = notes[index]
@@ -2012,7 +2021,7 @@ func _draw() -> void:
 	var now := _song_time_ms()
 	for raw_note in notes:
 		var note: Dictionary = raw_note
-		if note.state != "pending" and note.state != "holding" and note.state != "broken":
+		if note.state != "pending" and note.state != "holding" and note.state != "broken" and note.state != "hold_missed":
 			continue
 		var head_time: float = note.time
 		var tail_time: float = note.end
@@ -2020,8 +2029,11 @@ func _draw() -> void:
 		var tail_delta := tail_time - now
 		if tail_delta < -hold_release_window_ms or head_delta > approach_ms:
 			continue
-		var is_active_hold: bool = note.state == "holding" or note.state == "broken"
-		var head_y := HIT_LINE_Y if is_active_hold else HIT_LINE_Y - (head_delta / approach_ms) * (HIT_LINE_Y - SPAWN_Y)
+		# Only a successfully held, unbroken head freezes at the judgement line.
+		# A missed/broken head scrolls below it while the remaining body and tail
+		# continue to render; judging the head must not hide the whole object.
+		var pin_head: bool = note.state == "holding" and not bool(note.get("hold_broken", false)) and head_delta <= 0.0
+		var head_y := HIT_LINE_Y if pin_head else HIT_LINE_Y - (head_delta / approach_ms) * (HIT_LINE_Y - SPAWN_Y)
 		var tail_y := HIT_LINE_Y - (tail_delta / approach_ms) * (HIT_LINE_Y - SPAWN_Y)
 		var x: float = left + note.lane * LANE_WIDTH + 14.0
 		var w := LANE_WIDTH - 30.0
@@ -2029,12 +2041,12 @@ func _draw() -> void:
 		if tail_time > head_time:
 			var body_top := clampf(minf(head_y, tail_y), SPAWN_Y, playfield_bottom)
 			var body_bottom := clampf(maxf(head_y, tail_y), SPAWN_Y, playfield_bottom)
-			var body_color := Color("56a8ff") if note.state == "holding" else Color("d66b78") if note.state == "broken" else Color("3b78bd")
-			var tail_color := Color("9bcfff") if note.state != "broken" else Color("ff9c9c")
+			var body_color := Color("56a8ff") if note.state == "holding" else Color("d66b78") if note.state == "broken" else Color("8d98aa") if note.state == "hold_missed" else Color("3b78bd")
+			var tail_color := Color("9bcfff") if note.state == "holding" else Color("ff9c9c") if note.state == "broken" else Color("b0b7c4") if note.state == "hold_missed" else Color("9bcfff")
 			if body_bottom >= body_top:
 				draw_rect(Rect2(x + w * 0.25, body_top, w * 0.5, maxf(body_bottom - body_top, 3.0)), body_color, true)
 			if tail_y >= SPAWN_Y - 6.0 and tail_y <= playfield_bottom + 6.0:
 				draw_rect(Rect2(x + 2, clampf(tail_y, SPAWN_Y, playfield_bottom) - 6, w - 4, 12), tail_color, true)
-		var head_color := Color("56a8ff") if note.state == "holding" else Color("d66b78") if note.state == "broken" else Color("f2cf63")
+		var head_color := Color("56a8ff") if note.state == "holding" else Color("d66b78") if note.state == "broken" else Color("7d8798") if note.state == "hold_missed" else Color("f2cf63")
 		if head_y >= SPAWN_Y - 8.0 and head_y <= playfield_bottom + 8.0:
 			draw_rect(Rect2(x, clampf(head_y, SPAWN_Y, playfield_bottom) - 8, w, 16), head_color, true)

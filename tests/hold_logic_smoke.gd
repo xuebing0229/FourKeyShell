@@ -22,6 +22,53 @@ func run_test() -> void:
 		_fail("head press did not enter holding")
 		return
 
+	# Missing a hold head must record one Miss but keep a grey body/tail alive
+	# until the tail window expires, instead of making the whole note vanish.
+	scene.song_clock_ms = 1000.0
+	scene.notes = [{"lane": 0, "time": 1000, "end": 2000, "state": "pending"}]
+	scene.lane_down = [false, false, false, false]
+	var miss_count_before := int(scene.judgement_counts["Miss"])
+	scene.song_clock_ms = 1000.0 + scene.miss_window_ms + 1.0
+	scene._update_note_states()
+	if scene.notes[0].state != "hold_missed" or int(scene.judgement_counts["Miss"]) != miss_count_before + 1:
+		_fail("missed hold head did not remain visible as hold_missed")
+		return
+	scene.song_clock_ms = 1500.0
+	scene._update_note_states()
+	if scene.notes[0].state != "hold_missed":
+		_fail("missed hold disappeared before its tail")
+		return
+	scene.song_clock_ms = 2000.0 + scene.hold_release_window_ms + 1.0
+	scene._update_note_states()
+	if scene.notes[0].state != "missed" or int(scene.judgement_counts["Miss"]) != miss_count_before + 1:
+		_fail("missed hold did not retire after its tail window")
+		return
+
+	# A late re-press may hold the remaining body, but never changes the Miss
+	# into a successful head or awards an unbroken-tail bonus.
+	scene.song_clock_ms = 1000.0 + scene.miss_window_ms + 1.0
+	scene.notes = [{"lane": 0, "time": 1000, "end": 2000, "state": "pending"}]
+	scene._update_note_states()
+	var score_before := int(scene.score)
+	var accuracy_total_before := float(scene.accuracy_total)
+	scene.song_clock_ms = 1500.0
+	scene.lane_down[0] = true
+	scene._judge_lane_down(0)
+	if scene.notes[0].state != "holding" or not scene.notes[0].hold_broken or int(scene.score) != score_before:
+		_fail("late re-press did not preserve the missed-head result")
+		return
+	scene.song_clock_ms = 2000.0
+	scene._update_note_states()
+	if scene.notes[0].state != "completed" or int(scene.score) != score_before or float(scene.accuracy_total) != accuracy_total_before:
+		_fail("re-pressed missed head was incorrectly awarded an unbroken tail")
+		return
+
+	# Reset the lane before checking early-release behaviour.
+	scene.song_clock_ms = 1000.0
+	scene.notes = [{"lane": 0, "time": 1000, "end": 2000, "state": "pending"}]
+	scene.lane_down = [true, false, false, false]
+	scene._judge_lane_down(0)
+
 	# Releasing well before the tail must break the hold.
 	scene.song_clock_ms = 1500.0
 	scene.lane_down[0] = false
@@ -66,5 +113,5 @@ func run_test() -> void:
 		_fail("releasing during pause incorrectly broke hold")
 		return
 
-	print("HOLD LOGIC OK: head, break/re-press, tail completion, pause-safe release")
+	print("HOLD LOGIC OK: missed-head lifetime/re-press, head, break/re-press, tail completion, pause-safe release")
 	quit(0)
