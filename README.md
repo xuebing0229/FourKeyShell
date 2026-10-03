@@ -39,4 +39,6 @@
 
 构建客户版：双击 `构建发布版.bat`。输出在 `dist/FourKeyShell/`，客户只需双击其中的 `FourKeyShell.exe`，不需要安装 Godot。
 
+构建私有测试版：双击 `构建测试版.bat`。它会生成 `dist/FourKeyShell-test-v*.zip`，测试版设置页提供“检查测试版更新”。由于测试仓库是私有的，更新前需要本机安装 GitHub CLI 并完成 `gh auth login`；更新器会在关闭程序后覆盖安装并重新启动。
+
 换 UI：参照 `SHELL_API.md` 和 `SKIN_TEMPLATE.md` 替换 `skins/active_skin.tscn`，不要修改 `main.gd` 的判定逻辑。之后再次运行构建脚本即可得到新的定制 EXE。

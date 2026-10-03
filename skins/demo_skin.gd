@@ -175,7 +175,7 @@ func _build_nav() -> void:
 	_label(nav_root, "PLAY LOCAL", Vector2(30, 410), Vector2(180, 20), 11, MUTED)
 	status_label = _label(nav_root, "等待载入谱面", Vector2(30, 438), Vector2(178, 70), 13, MUTED)
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_label(nav_root, "v0.2  ·  OFFLINE", Vector2(30, 650), Vector2(180, 20), 11, Color("536886"))
+	_label(nav_root, "v%s  ·  OFFLINE" % _app_version(), Vector2(30, 650), Vector2(180, 20), 11, Color("536886"))
 
 func _add_nav_button(text: String, icon: String, page: int, y: float) -> void:
 	var button := _make_button(nav_root, icon + "   " + text, Vector2(18, y), Vector2(200, 42), _navigate.bind(page), false)
