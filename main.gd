@@ -130,6 +130,7 @@ var default_ui_root: Control
 var skin_root: Control
 var default_playfield_visible := true
 var file_dialog: FileDialog
+var file_dialog_dir := ""
 var key_buttons: Array[Button] = []
 var chart_candidates: Array[Dictionary] = []
 
@@ -793,8 +794,9 @@ func _build_ui() -> void:
 	file_dialog = FileDialog.new()
 	file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	file_dialog.use_native_dialog = true
 	file_dialog.filters = PackedStringArray(["*.osu,*.osz ; osu!mania chart or package"])
-	file_dialog.current_dir = ProjectSettings.globalize_path("res://Songs")
+	file_dialog.current_dir = _get_file_dialog_dir()
 	file_dialog.file_selected.connect(_on_file_selected)
 	add_child(file_dialog)
 
@@ -1039,14 +1041,30 @@ func _input(event: InputEvent) -> void:
 	get_viewport().set_input_as_handled()
 
 func _open_dialog() -> void:
+	file_dialog.current_dir = _get_file_dialog_dir()
 	file_dialog.popup_centered_ratio(0.8)
 
 func _on_file_selected(path: String) -> void:
+	var selected_dir := path.get_base_dir()
+	if selected_dir != "" and DirAccess.dir_exists_absolute(selected_dir):
+		file_dialog_dir = selected_dir
+		_save_settings()
 	if import_dialog_mode:
 		import_dialog_mode = false
 		import_chart_to_library(path)
 	else:
 		_load_path(path)
+
+func _get_file_dialog_dir() -> String:
+	if file_dialog_dir != "" and DirAccess.dir_exists_absolute(file_dialog_dir):
+		return file_dialog_dir
+	var library_dir := ProjectSettings.globalize_path("user://songs")
+	if DirAccess.dir_exists_absolute(library_dir):
+		return library_dir
+	var documents_dir := OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
+	if documents_dir != "" and DirAccess.dir_exists_absolute(documents_dir):
+		return documents_dir
+	return ProjectSettings.globalize_path("res://")
 
 func _on_files_dropped(paths: PackedStringArray) -> void:
 	if not paths.is_empty():
@@ -1784,6 +1802,7 @@ func _load_settings() -> void:
 	for saved_entry in config.get_value("scores", "personal_bests", []):
 		if saved_entry is Dictionary and str(saved_entry.get("path", "")) != "":
 			personal_best_entries.append(saved_entry.duplicate(true))
+	file_dialog_dir = str(config.get_value("files", "last_dialog_dir", ""))
 
 func _save_settings() -> void:
 	var config := ConfigFile.new()
@@ -1796,6 +1815,7 @@ func _save_settings() -> void:
 	config.set_value("gameplay", "no_fail_mode", no_fail_mode)
 	config.set_value("recent", "paths", recent_charts)
 	config.set_value("scores", "personal_bests", personal_best_entries)
+	config.set_value("files", "last_dialog_dir", file_dialog_dir)
 	config.save(CONFIG_PATH)
 
 func _remember_chart(path: String) -> void:
