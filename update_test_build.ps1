@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 function Get-GhPath {
     $command = Get-Command gh -ErrorAction SilentlyContinue
     if ($null -eq $command) {
-        throw "GitHub CLI (gh) 未安装或不在 PATH 中。"
+        throw "GitHub CLI (gh) is not installed or is not on PATH."
     }
     return $command.Source
 }
@@ -21,11 +21,11 @@ function Get-GhPath {
 function Get-LatestRelease([string]$GhPath, [string]$Repository) {
     $json = & $GhPath api "repos/$Repository/releases?per_page=20"
     if ($LASTEXITCODE -ne 0) {
-        throw "无法读取 GitHub Release；请确认 gh 已登录并有该私有仓库的访问权限。"
+        throw "Cannot read GitHub releases. Make sure gh is logged in and can access the private repository."
     }
     $releases = @($json | ConvertFrom-Json | Where-Object { -not $_.draft } | Sort-Object { [DateTime]$_.published_at } -Descending)
     if ($releases.Count -eq 0) {
-        throw "仓库还没有可用的 GitHub Release。"
+        throw "The repository has no usable GitHub Release yet."
     }
     return $releases[0]
 }
@@ -40,7 +40,7 @@ try {
     $tag = [string]$release.tag_name
     $assets = @($release.assets | Where-Object { $_.name -like "FourKeyShell-test-*.zip" })
     if ($assets.Count -eq 0) {
-        throw "最新 Release 没有 FourKeyShell 测试包。"
+        throw "The latest Release has no FourKeyShell test package."
     }
     $asset = $assets[0]
 
@@ -55,7 +55,7 @@ try {
     }
 
     if ([string]::IsNullOrWhiteSpace($InstallDir) -or -not (Test-Path -LiteralPath $InstallDir)) {
-        throw "安装目录不存在。"
+        throw "The install directory does not exist."
     }
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("FourKeyShell-update-" + [Guid]::NewGuid().ToString("N"))
     $downloadDir = Join-Path $tempRoot "download"
@@ -63,10 +63,10 @@ try {
     New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
     New-Item -ItemType Directory -Path $expandedDir -Force | Out-Null
 
-    Write-Host "下载 $tag ..."
+    Write-Host "Downloading $tag ..."
     & $gh release download $tag --repo $Repo --pattern $asset.name --dir $downloadDir --clobber
     if ($LASTEXITCODE -ne 0) {
-        throw "下载测试包失败。"
+        throw "Downloading the test package failed."
     }
     $zipPath = Join-Path $downloadDir $asset.name
     Expand-Archive -LiteralPath $zipPath -DestinationPath $expandedDir -Force
@@ -75,17 +75,17 @@ try {
         try {
             Wait-Process -Id $ProcessId -Timeout 20 -ErrorAction SilentlyContinue
         } catch {
-            # 进程已退出即可继续覆盖。
+            # The process already exited; continue with the replacement.
         }
     }
 
-    Write-Host "覆盖安装到 $InstallDir ..."
+    Write-Host "Replacing files in $InstallDir ..."
     Get-ChildItem -LiteralPath $expandedDir -Force | Copy-Item -Destination $InstallDir -Recurse -Force
     $exePath = Join-Path $InstallDir $ExecutableName
     if (-not (Test-Path -LiteralPath $exePath)) {
-        throw "覆盖安装完成，但找不到 $ExecutableName。"
+        throw "The replacement finished, but $ExecutableName was not found."
     }
-    Write-Host "更新完成，正在启动 $tag ..."
+    Write-Host "Update complete. Starting $tag ..."
     Start-Process -FilePath $exePath -WorkingDirectory $InstallDir
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 } catch {
