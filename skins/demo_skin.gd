@@ -885,7 +885,7 @@ func _check_for_updates() -> void:
 		"-Repo", UPDATE_REPO,
 		"-CurrentVersion", _app_version(),
 	])
-	var exit_code := OS.execute("powershell.exe", args, true, output)
+	var exit_code := OS.execute("powershell.exe", args, output, true)
 	var response := ""
 	for item in output:
 		response += str(item)
