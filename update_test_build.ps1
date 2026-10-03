@@ -19,11 +19,12 @@ function Get-GhPath {
 }
 
 function Get-LatestRelease([string]$GhPath, [string]$Repository) {
-    $json = & $GhPath api "repos/$Repository/releases?per_page=20"
+    $json = (& $GhPath api "repos/$Repository/releases?per_page=20" | Out-String)
     if ($LASTEXITCODE -ne 0) {
         throw "Cannot read GitHub releases. Make sure gh is logged in and can access the private repository."
     }
-    $releases = @($json | ConvertFrom-Json | Where-Object { -not $_.draft } | Sort-Object { [DateTime]$_.published_at } -Descending)
+    $parsed = ConvertFrom-Json -InputObject ([string]$json)
+    $releases = @($parsed | Where-Object { -not $_.draft } | Sort-Object -Property published_at -Descending)
     if ($releases.Count -eq 0) {
         throw "The repository has no usable GitHub Release yet."
     }
