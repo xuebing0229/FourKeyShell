@@ -1,0 +1,18 @@
+# Godot/editor generated state
+.godot/
+.imports/
+.library/
+export_templates/
+script_templates/
+text_editor_themes/
+tools/
+
+# Local builds and shortcuts
+dist/
+*.lnk
+
+# Test output
+*.log
+
+# Local/test music and chart packages; add only after distribution rights are confirmed
+Songs/
