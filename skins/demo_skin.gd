@@ -14,6 +14,8 @@ const MUTED := Color("91a3c2")
 const ACCENT := Color("72e3c0")
 const ACCENT_2 := Color("86a7ff")
 const WARNING := Color("ffd166")
+const UPDATE_REPO := "xuebing0229/FourKeyShell"
+const UPDATE_SCRIPT_NAME := "update_test_build.ps1"
 
 var shell: Control
 var current_page := Page.HOME
@@ -53,6 +55,8 @@ var settings_page: Control
 
 var settings_key_buttons: Array[Button] = []
 var settings_status: Label
+var update_button: Button
+var update_status: Label
 var volume_slider: HSlider
 var speed_slider: HSlider
 var hit_sounds_toggle: CheckButton
@@ -340,6 +344,9 @@ func _build_settings_page() -> void:
 	_label(app_settings, "设置会自动保存到本机。", Vector2(22, 86), Vector2(280, 22), 12, MUTED)
 	_make_button(app_settings, "切换全屏", Vector2(22, 130), Vector2(120, 40), _toggle_fullscreen, false)
 	_make_button(app_settings, "返回首页", Vector2(154, 130), Vector2(120, 40), _close_settings, true)
+	update_button = _make_button(app_settings, "检查测试版更新", Vector2(22, 176), Vector2(160, 34), _check_for_updates, false)
+	update_status = _label(app_settings, "通过 GitHub Release 更新", Vector2(194, 176), Vector2(180, 38), 11, MUTED)
+	update_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
 func _build_gameplay_page() -> void:
 	_make_button(gameplay_page, "← 退出选曲", Vector2(22, 22), Vector2(118, 34), _leave_gameplay, false)
@@ -859,6 +866,75 @@ func _update_offset_label() -> void:
 func _toggle_fullscreen() -> void:
 	if shell != null:
 		settings_status.text = "全屏状态：" + ("已开启" if shell.toggle_fullscreen() else "已关闭")
+
+func _check_for_updates() -> void:
+	if update_button == null or update_status == null:
+		return
+	var script_path := _resolve_update_script_path()
+	if script_path == "":
+		update_status.text = "更新器缺失，请重新下载测试版"
+		return
+	update_button.disabled = true
+	update_status.text = "正在检查 GitHub Release…"
+	var output: Array = []
+	var args := PackedStringArray([
+		"-NoProfile",
+		"-ExecutionPolicy", "Bypass",
+		"-File", script_path,
+		"-Mode", "Check",
+		"-Repo", UPDATE_REPO,
+		"-CurrentVersion", _app_version(),
+	])
+	var exit_code := OS.execute("powershell.exe", args, true, output)
+	var response := ""
+	for item in output:
+		response += str(item)
+	response = response.strip_edges()
+	if exit_code != 0:
+		update_status.text = "检查失败：请确认已登录 GitHub CLI"
+		update_button.disabled = false
+		return
+	if response.begins_with("UPDATE|"):
+		var parts := response.split("|", false)
+		var latest := parts[1] if parts.size() > 1 else "新版本"
+		update_status.text = "发现 %s，应用将关闭并覆盖更新" % latest
+		_start_update(script_path)
+		return
+	if response.begins_with("CURRENT|"):
+		update_status.text = "当前已是最新测试版"
+	else:
+		update_status.text = "没有可用更新"
+	update_button.disabled = false
+
+func _start_update(script_path: String) -> void:
+	var install_dir := OS.get_executable_path().get_base_dir()
+	var args := PackedStringArray([
+		"-NoProfile",
+		"-ExecutionPolicy", "Bypass",
+		"-File", script_path,
+		"-Mode", "Install",
+		"-Repo", UPDATE_REPO,
+		"-CurrentVersion", _app_version(),
+		"-InstallDir", install_dir,
+		"-ProcessId", str(OS.get_process_id()),
+		"-ExecutableName", OS.get_executable_path().get_file(),
+	])
+	var updater_pid := OS.create_process("powershell.exe", args, true)
+	if updater_pid <= 0:
+		update_status.text = "无法启动更新器，请手动重启测试版"
+		update_button.disabled = false
+		return
+	get_tree().quit()
+
+func _resolve_update_script_path() -> String:
+	var packaged := OS.get_executable_path().get_base_dir().path_join(UPDATE_SCRIPT_NAME)
+	if FileAccess.file_exists(packaged):
+		return packaged
+	var development := ProjectSettings.globalize_path("res://" + UPDATE_SCRIPT_NAME)
+	return development if FileAccess.file_exists(development) else ""
+
+func _app_version() -> String:
+	return str(ProjectSettings.get_setting("application/config/version", "0.0.0"))
 
 func _seek_practice(delta_ms: float) -> void:
 	if shell != null:
