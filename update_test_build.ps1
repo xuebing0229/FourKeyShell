@@ -65,8 +65,19 @@ try {
     New-Item -ItemType Directory -Path $expandedDir -Force | Out-Null
 
     Write-Host "Downloading $tag ..."
-    & $gh release download $tag --repo $Repo --pattern $asset.name --dir $downloadDir --clobber
-    if ($LASTEXITCODE -ne 0) {
+    $downloaded = $false
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        & $gh release download $tag --repo $Repo --pattern $asset.name --dir $downloadDir --clobber
+        if ($LASTEXITCODE -eq 0) {
+            $downloaded = $true
+            break
+        }
+        if ($attempt -lt 3) {
+            Write-Host "Download attempt $attempt failed; retrying ..."
+            Start-Sleep -Seconds (2 * $attempt)
+        }
+    }
+    if (-not $downloaded) {
         throw "Downloading the test package failed."
     }
     $zipPath = Join-Path $downloadDir $asset.name
