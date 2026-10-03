@@ -23,6 +23,8 @@ signal hit_sounds_changed(enabled: bool)
 signal timing_calibration_changed(state: Dictionary)
 signal replay_state_changed(available: bool, playing: bool)
 signal preview_changed(active: bool, label: String)
+signal preview_progress_changed(position_sec: float, duration_sec: float)
+signal preview_mode_changed(mode: int, label: String)
 signal health_changed(health: float, no_fail: bool, failed: bool)
 
 const LANE_COUNT := 4
@@ -42,6 +44,10 @@ const CONFIG_PATH := "user://four_key_shell.cfg"
 const REPLAY_PATH := "user://last_replay.cfg"
 const CALIBRATION_BEAT_MS := 500.0
 const CALIBRATION_TAPS_REQUIRED := 8
+const PREVIEW_MODE_SINGLE := 0
+const PREVIEW_MODE_SINGLE_LOOP := 1
+const PREVIEW_MODE_PLAYLIST := 2
+const PREVIEW_MODE_PLAYLIST_LOOP := 3
 
 var notes: Array = []
 var audio_player: AudioStreamPlayer
@@ -51,7 +57,10 @@ var hit_sound_cursor := 0
 var hit_sound_streams: Dictionary = {}
 var calibration_player: AudioStreamPlayer
 var preview_player: AudioStreamPlayer
-var preview_remaining_sec := 0.0
+var preview_active := false
+var preview_paused := false
+var preview_entry_index := -1
+var preview_mode := PREVIEW_MODE_SINGLE
 var song_title := "未载入谱面"
 var song_artist := ""
 var song_version := ""
@@ -170,7 +179,7 @@ func _ready() -> void:
 	calibration_player.finished.connect(cancel_timing_calibration)
 	add_child(calibration_player)
 	preview_player = AudioStreamPlayer.new()
-	preview_player.finished.connect(stop_preview)
+	preview_player.finished.connect(_on_preview_finished)
 	add_child(preview_player)
 	set_audio_levels()
 	get_window().files_dropped.connect(_on_files_dropped)
@@ -543,40 +552,117 @@ func load_library_entry(index: int) -> void:
 func preview_library_entry(index: int) -> bool:
 	if index < 0 or index >= library_entries.size() or calibration_active:
 		return false
-	stop_preview()
+	return _start_preview_entry(index)
+
+func stop_preview() -> void:
+	if preview_player == null or not preview_active:
+		return
+	preview_player.stop()
+	preview_active = false
+	preview_paused = false
+	preview_entry_index = -1
+	preview_player.stream = null
+	preview_changed.emit(false, "")
+	preview_progress_changed.emit(0.0, 0.0)
+
+func get_preview_state() -> Dictionary:
+	var duration := preview_player.stream.get_length() if preview_player != null and preview_player.stream != null else 0.0
+	var position := preview_player.get_playback_position() if preview_active else 0.0
+	return {
+		"active": preview_active,
+		"paused": preview_paused,
+		"position_sec": position,
+		"duration_sec": duration,
+		"entry_index": preview_entry_index,
+		"mode": preview_mode,
+		"mode_label": _preview_mode_label(),
+	}
+
+func toggle_preview_pause() -> bool:
+	if not preview_active or preview_player == null:
+		return false
+	preview_paused = not preview_paused
+	preview_player.stream_paused = preview_paused
+	return true
+
+func seek_preview_seconds(position_sec: float) -> void:
+	if not preview_active or preview_player == null or preview_player.stream == null:
+		return
+	preview_player.seek(clampf(position_sec, 0.0, preview_player.stream.get_length()))
+	preview_progress_changed.emit(preview_player.get_playback_position(), preview_player.stream.get_length())
+
+func cycle_preview_mode() -> int:
+	preview_mode = (preview_mode + 1) % 4
+	preview_mode_changed.emit(preview_mode, _preview_mode_label())
+	return preview_mode
+
+func get_preview_mode() -> Dictionary:
+	return {"mode": preview_mode, "label": _preview_mode_label()}
+
+func _start_preview_entry(index: int) -> bool:
+	if index < 0 or index >= library_entries.size():
+		return false
 	var entry := library_entries[index]
+	var stream := _preview_stream_for_entry(entry)
+	if stream == null:
+		_set_status("无法试听：音频不存在或格式不支持", true)
+		return false
+	pause_game()
+	preview_player.stop()
+	preview_player.stream = stream
+	preview_player.stream_paused = false
+	var start_sec := clampf(float(entry.get("preview_ms", 0.0)) / 1000.0, 0.0, maxf(0.0, stream.get_length() - 0.05))
+	preview_player.play(start_sec)
+	preview_active = true
+	preview_paused = false
+	preview_entry_index = index
+	preview_changed.emit(true, str(entry.get("label", "")))
+	preview_mode_changed.emit(preview_mode, _preview_mode_label())
+	preview_progress_changed.emit(start_sec, stream.get_length())
+	return true
+
+func _preview_stream_for_entry(entry: Dictionary) -> AudioStream:
 	var stream: AudioStream
 	if str(entry.get("package_path", "")) != "":
 		var reader := ZIPReader.new()
 		if reader.open(str(entry.package_path)) != OK:
-			return false
+			return null
 		var audio_name := str(entry.audio_path)
 		if reader.get_files().has(audio_name):
 			stream = _load_audio_buffer(audio_name, reader.read_file(audio_name))
 		reader.close()
 	else:
 		stream = _load_audio(str(entry.get("audio_path", "")))
-	if stream == null:
-		_set_status("无法试听：音频不存在或格式不支持", true)
-		return false
-	pause_game()
-	preview_player.stream = stream
-	var start_sec := clampf(float(entry.get("preview_ms", 0.0)) / 1000.0, 0.0, maxf(0.0, stream.get_length() - 1.0))
-	preview_player.play(start_sec)
-	preview_remaining_sec = 15.0
-	preview_changed.emit(true, str(entry.get("label", "")))
-	return true
+	return stream
 
-func stop_preview() -> void:
-	if preview_player == null or preview_remaining_sec <= 0.0:
+func _on_preview_finished() -> void:
+	if not preview_active:
 		return
-	preview_player.stop()
-	preview_remaining_sec = 0.0
-	preview_player.stream = null
-	preview_changed.emit(false, "")
+	if preview_mode == PREVIEW_MODE_SINGLE_LOOP:
+		_start_preview_entry(preview_entry_index)
+		return
+	if preview_mode == PREVIEW_MODE_PLAYLIST or preview_mode == PREVIEW_MODE_PLAYLIST_LOOP:
+		var next_index := preview_entry_index + 1
+		if next_index >= library_entries.size():
+			if preview_mode == PREVIEW_MODE_PLAYLIST_LOOP:
+				next_index = 0
+			else:
+				stop_preview()
+				return
+		if _start_preview_entry(next_index):
+			return
+	stop_preview()
 
-func get_preview_state() -> Dictionary:
-	return {"active": preview_remaining_sec > 0.0, "remaining_sec": maxf(preview_remaining_sec, 0.0)}
+func _preview_mode_label() -> String:
+	match preview_mode:
+		PREVIEW_MODE_SINGLE_LOOP:
+			return "单曲循环"
+		PREVIEW_MODE_PLAYLIST:
+			return "列表播放"
+		PREVIEW_MODE_PLAYLIST_LOOP:
+			return "列表循环"
+		_:
+			return "播放一首"
 
 func seek_practice_ms(delta_ms: float) -> void:
 	if not playing or notes.is_empty() or audio_player == null or audio_player.stream == null:
@@ -845,11 +931,8 @@ func _load_skin() -> void:
 	skin_loaded.emit(configured_path)
 
 func _process(delta: float) -> void:
-	if preview_remaining_sec > 0.0:
-		preview_remaining_sec -= delta
-		if preview_remaining_sec <= 0.0:
-			preview_remaining_sec = 0.001
-			stop_preview()
+	if preview_active and preview_player != null and preview_player.stream != null:
+		preview_progress_changed.emit(preview_player.get_playback_position(), preview_player.stream.get_length())
 	if not playing or paused:
 		return
 	if audio_started and not audio_finished:

@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 set "GODOT=%~dp0tools\Godot_v4.7.2-stable_win64_console.exe"
-set "VERSION=0.2.0-beta.3"
+set "VERSION=0.2.0-beta.4"
 set "OUT=%~dp0dist\FourKeyShell-test-v%VERSION%"
 set "EXE=%OUT%\FourKeyShell.exe"
 set "PACKAGE=%~dp0dist\FourKeyShell-test-v%VERSION%.zip"

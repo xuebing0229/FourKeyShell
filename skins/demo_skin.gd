@@ -44,6 +44,11 @@ var library_detail_meta: Label
 var library_detail_path: Label
 var library_empty_label: Label
 var library_preview_button: Button
+var library_preview_stop_button: Button
+var library_preview_mode_button: Button
+var library_preview_seek: HSlider
+var library_preview_time: Label
+var library_preview_seek_updating := false
 var library_play_button: Button
 var filtered_library_indices: Array[int] = []
 var selected_library_visible := -1
@@ -109,6 +114,8 @@ func attach_shell(runtime: Control) -> void:
 	shell.timing_calibration_changed.connect(_on_timing_calibration_changed)
 	shell.replay_state_changed.connect(_on_replay_state_changed)
 	shell.preview_changed.connect(_on_preview_changed)
+	shell.preview_progress_changed.connect(_on_preview_progress_changed)
+	shell.preview_mode_changed.connect(_on_preview_mode_changed)
 	shell.set_default_playfield_visible(false)
 	if volume_slider != null:
 		volume_slider.value = shell.get_volume_percent()
@@ -124,6 +131,7 @@ func attach_shell(runtime: Control) -> void:
 	_refresh_achievements()
 	var replay_info: Dictionary = shell.get_replay_info()
 	_on_replay_state_changed(bool(replay_info.get("available", false)), bool(replay_info.get("playing", false)))
+	_refresh_preview_controls()
 	_show_page(Page.HOME)
 
 func _build_visual_shell() -> void:
@@ -265,9 +273,26 @@ func _build_library_page() -> void:
 	library_detail_meta.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	library_detail_path = _label(detail, "", Vector2(22, 250), Vector2(250, 80), 11, Color("617495"))
 	library_detail_path.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	library_preview_button = _make_button(detail, "试听 15 秒", Vector2(22, 366), Vector2(118, 40), _preview_selected_library, false)
-	library_play_button = _make_button(detail, "开始游戏", Vector2(150, 366), Vector2(126, 40), _play_selected_library, true)
+	library_preview_seek = HSlider.new()
+	library_preview_seek.position = Vector2(22, 346)
+	library_preview_seek.size = Vector2(254, 18)
+	library_preview_seek.min_value = 0.0
+	library_preview_seek.max_value = 1.0
+	library_preview_seek.step = 0.1
+	library_preview_seek.editable = false
+	library_preview_seek.drag_started.connect(_on_preview_seek_started)
+	library_preview_seek.drag_ended.connect(_on_preview_seek_ended)
+	library_preview_seek.value_changed.connect(_on_preview_seek_changed)
+	detail.add_child(library_preview_seek)
+	library_preview_time = _label(detail, "00:00 / 00:00", Vector2(22, 364), Vector2(254, 20), 11, MUTED)
+	library_preview_time.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	library_preview_button = _make_button(detail, "试听", Vector2(22, 391), Vector2(78, 36), _preview_selected_library, false)
+	library_preview_stop_button = _make_button(detail, "停止", Vector2(108, 391), Vector2(58, 36), _stop_preview, false)
+	library_preview_mode_button = _make_button(detail, "播放一首", Vector2(174, 391), Vector2(102, 36), _cycle_preview_mode, false)
+	library_play_button = _make_button(detail, "开始游戏", Vector2(22, 438), Vector2(254, 38), _play_selected_library, true)
 	library_preview_button.disabled = true
+	library_preview_stop_button.disabled = true
+	library_preview_mode_button.disabled = false
 	library_play_button.disabled = true
 
 func _build_achievements_page() -> void:
@@ -563,10 +588,33 @@ func _preview_selected_library() -> void:
 	if shell == null or selected_library_visible < 0 or selected_library_visible >= filtered_library_indices.size():
 		return
 	var preview_state: Dictionary = shell.get_preview_state()
-	if bool(preview_state.get("active", false)):
-		shell.stop_preview()
+	var selected_index := filtered_library_indices[selected_library_visible]
+	if bool(preview_state.get("active", false)) and int(preview_state.get("entry_index", -1)) == selected_index:
+		shell.toggle_preview_pause()
 	else:
-		shell.preview_library_entry(filtered_library_indices[selected_library_visible])
+		shell.preview_library_entry(selected_index)
+
+func _stop_preview() -> void:
+	if shell != null:
+		shell.stop_preview()
+
+func _cycle_preview_mode() -> void:
+	if shell != null:
+		shell.cycle_preview_mode()
+
+func _on_preview_seek_started() -> void:
+	library_preview_seek_updating = true
+
+func _on_preview_seek_ended(value_changed: bool) -> void:
+	library_preview_seek_updating = false
+	if value_changed and shell != null:
+		shell.seek_preview_seconds(library_preview_seek.value)
+
+func _on_preview_seek_changed(value: float) -> void:
+	if library_preview_seek_updating or shell == null:
+		return
+	if library_preview_seek.has_focus():
+		shell.seek_preview_seconds(value)
 
 func _import_chart() -> void:
 	if shell != null:
@@ -609,7 +657,9 @@ func _refresh_library_detail() -> void:
 		library_detail_meta.text = ""
 		library_detail_path.text = ""
 		library_preview_button.disabled = true
+		library_preview_seek.editable = false
 		library_play_button.disabled = true
+		_refresh_preview_controls()
 		return
 	var entries: Array = shell.get_library_entries()
 	var entry: Dictionary = entries[filtered_library_indices[selected_library_visible]]
@@ -619,6 +669,24 @@ func _refresh_library_detail() -> void:
 	library_detail_path.text = str(entry.get("path", ""))
 	library_preview_button.disabled = false
 	library_play_button.disabled = false
+	_refresh_preview_controls()
+
+func _refresh_preview_controls() -> void:
+	if shell == null:
+		return
+	var state: Dictionary = shell.get_preview_state()
+	var mode: Dictionary = shell.get_preview_mode()
+	var active := bool(state.get("active", false))
+	var paused := bool(state.get("paused", false))
+	if library_preview_button != null:
+		library_preview_button.text = "继续" if active and paused else "暂停" if active else "试听"
+	if library_preview_stop_button != null:
+		library_preview_stop_button.disabled = not active
+	if library_preview_mode_button != null:
+		library_preview_mode_button.text = str(mode.get("label", "播放一首"))
+	if library_preview_seek != null:
+		library_preview_seek.editable = active
+	_on_preview_progress_changed(float(state.get("position_sec", 0.0)), float(state.get("duration_sec", 0.0)))
 
 func _refresh_home() -> void:
 	if shell == null or home_title == null:
@@ -982,9 +1050,26 @@ func _on_replay_state_changed(available: bool, playing: bool) -> void:
 func _on_preview_changed(active: bool, label: String) -> void:
 	if library_preview_button == null:
 		return
-	library_preview_button.text = "停止试听" if active else "试听 15 秒"
+	_refresh_preview_controls()
 	if active:
 		status_label.text = "试听：" + label
+
+func _on_preview_progress_changed(position_sec: float, duration_sec: float) -> void:
+	if library_preview_seek == null or library_preview_time == null:
+		return
+	library_preview_seek_updating = true
+	library_preview_seek.max_value = maxf(duration_sec, 1.0)
+	library_preview_seek.value = clampf(position_sec, 0.0, library_preview_seek.max_value)
+	library_preview_seek_updating = false
+	library_preview_time.text = "%s / %s" % [_format_preview_time(position_sec), _format_preview_time(duration_sec)]
+
+func _on_preview_mode_changed(_mode: int, label: String) -> void:
+	if library_preview_mode_button != null:
+		library_preview_mode_button.text = label
+
+func _format_preview_time(seconds: float) -> String:
+	var total := maxi(0, int(floor(seconds)))
+	return "%02d:%02d" % [total / 60, total % 60]
 
 func _on_recent_charts_changed(_charts: Array) -> void:
 	_refresh_home()

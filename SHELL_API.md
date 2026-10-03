@@ -32,7 +32,8 @@
 - `get_practice_loop()` / `set_practice_loop_start()` / `set_practice_loop_end()` / `clear_practice_loop()`：读取或设置练习循环区间；循环播放时会自动回到起点并重置本段统计。
 - `reset_timing_offset()`：将全局时序偏移恢复为 0 ms。
 - `get_timing_calibration_state()` / `start_timing_calibration()` / `cancel_timing_calibration()`：运行或取消本地自动延迟校准；完成后自动保存全局偏移。
-- `preview_library_entry(index)` / `stop_preview()` / `get_preview_state()`：试听曲库条目前 15 秒；不会开始游戏。
+- `preview_library_entry(index)` / `stop_preview()` / `toggle_preview_pause()` / `seek_preview_seconds(position_sec)`：控制曲库完整试听；不会开始游戏。
+- `cycle_preview_mode()` / `get_preview_mode()`：在播放一首、单曲循环、列表播放、列表循环之间切换。
 - `get_replay_info()` / `start_replay()` / `stop_replay()`：读取并播放当前谱面最近一局的本地回放；回放不刷新最佳成绩。
 
 ## 事件信号
@@ -58,6 +59,8 @@
 - `practice_loop_changed(start_ms, end_ms)`：练习循环区间变化；关闭时两个值均为负数。
 - `timing_calibration_changed(state)`：自动校准进度或完成状态变化。
 - `preview_changed(active, label)`：曲库试听开始或停止。
+- `preview_progress_changed(position_sec, duration_sec)`：试听进度更新。
+- `preview_mode_changed(mode, label)`：试听播放模式更新。
 - `replay_state_changed(available, playing)`：最近回放可用性或播放状态变化。
 - `health_changed(health, no_fail, failed)`：血量、练习模式或失败状态变化。
 

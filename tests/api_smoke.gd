@@ -108,10 +108,27 @@ func run_test() -> void:
 		push_error("library preview API failed")
 		quit(1)
 		return
+	var preview_state: Dictionary = scene.get_preview_state()
+	if float(preview_state.get("duration_sec", 0.0)) <= 0.0:
+		push_error("library preview duration API failed")
+		quit(1)
+		return
+	if not scene.toggle_preview_pause() or not bool(scene.get_preview_state().get("paused", false)):
+		push_error("library preview pause API failed")
+		quit(1)
+		return
+	scene.seek_preview_seconds(0.0)
+	var preview_mode_before := int(scene.get_preview_mode().get("mode", -1))
+	for _i in 4:
+		scene.cycle_preview_mode()
+	if int(scene.get_preview_mode().get("mode", -1)) != preview_mode_before:
+		push_error("library preview mode API failed")
+		quit(1)
+		return
 	scene.stop_preview()
 	if bool(scene.get_preview_state().get("active", false)):
 		push_error("library preview stop API failed")
 		quit(1)
 		return
-	print("SHELL API OK: metadata, load, pause/resume, retry, key binding, volume, scroll speed, practice seek/loop, hit sounds, timing calibration, library search/preview interfaces")
+	print("SHELL API OK: metadata, load, pause/resume, retry, key binding, volume, scroll speed, practice seek/loop, hit sounds, timing calibration, library preview controls")
 	quit(0)
