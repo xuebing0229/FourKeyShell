@@ -87,7 +87,7 @@ var combo := 0
 var best_combo := 0
 var accuracy_points := 0.0
 var accuracy_total := 0.0
-var judgement_counts := {"Perfect": 0, "Great": 0, "Good": 0, "OK": 0, "Meh": 0, "Miss": 0, "Hold OK": 0, "Hold Break": 0}
+var judgement_counts := {"Perfect": 0, "Great": 0, "Good": 0, "OK": 0, "Meh": 0, "Miss": 0, "Hold Break": 0}
 var last_judgement := ""
 var last_timing_error_ms := 0.0
 var early_hit_count := 0
@@ -171,7 +171,6 @@ func _ready() -> void:
 		"Good": _make_hit_sound(650.0),
 		"OK": _make_hit_sound(480.0),
 		"Meh": _make_hit_sound(340.0),
-		"Hold OK": _make_hit_sound(760.0),
 		"Hold Break": _make_hit_sound(240.0),
 	}
 	calibration_player = AudioStreamPlayer.new()
@@ -704,6 +703,7 @@ func _seek_practice_absolute(target: float) -> void:
 		var note: Dictionary = notes[i]
 		note.state = "skipped" if float(note.time) < target else "pending"
 		note.hold_broken = false
+		note.tail_judged = false
 		note.head_error_ms = 0.0
 		note.tail_error_ms = 0.0
 		notes[i] = note
@@ -712,7 +712,7 @@ func _seek_practice_absolute(target: float) -> void:
 	best_combo = 0
 	accuracy_points = 0.0
 	accuracy_total = 0.0
-	judgement_counts = {"Perfect": 0, "Great": 0, "Good": 0, "OK": 0, "Meh": 0, "Miss": 0, "Hold OK": 0, "Hold Break": 0}
+	judgement_counts = {"Perfect": 0, "Great": 0, "Good": 0, "OK": 0, "Meh": 0, "Miss": 0, "Hold Break": 0}
 	last_judgement = ""
 	last_timing_error_ms = 0.0
 	early_hit_count = 0
@@ -1304,7 +1304,7 @@ func _load_chart(path: String) -> void:
 	best_combo = 0
 	accuracy_points = 0.0
 	accuracy_total = 0.0
-	judgement_counts = {"Perfect": 0, "Great": 0, "Good": 0, "OK": 0, "Meh": 0, "Miss": 0, "Hold OK": 0, "Hold Break": 0}
+	judgement_counts = {"Perfect": 0, "Great": 0, "Good": 0, "OK": 0, "Meh": 0, "Miss": 0, "Hold Break": 0}
 	last_judgement = ""
 	last_timing_error_ms = 0.0
 	early_hit_count = 0
@@ -1384,6 +1384,7 @@ func _parse_osu(text: String) -> Dictionary:
 				"end": maxi(end_time, time),
 				"state": "pending",
 				"hold_broken": false,
+				"tail_judged": false,
 				"head_error_ms": 0.0,
 				"tail_error_ms": 0.0,
 				"hit_sound": kind >> 2 & 7,
@@ -1490,7 +1491,9 @@ func _judge_lane_up(lane: int, forced_time_ms := -1.0e30) -> void:
 		var note: Dictionary = notes[i]
 		if note.state != "holding" or note.lane != lane:
 			continue
-		if absf(now - float(note.end)) <= hold_release_window_ms:
+		if now > float(note.end) + hold_release_window_ms:
+			_judge_hold_tail(i, false, now - float(note.end))
+		elif absf(now - float(note.end)) <= hold_release_window_ms:
 			note.tail_error_ms = now - float(note.end)
 			notes[i] = note
 			_complete_hold(i)
@@ -1515,42 +1518,66 @@ func _update_note_states() -> void:
 			combo = 0
 			_record_judgement("Miss", 0, 0.0)
 		elif note.state == "holding" and now >= float(note.end):
-			if lane_down[note.lane]:
-				_complete_hold(i)
-			else:
+			# The tail is judged on key-up. If the key-up was lost before the
+			# tail, record the body break; never auto-complete a held key here.
+			if now > float(note.end) + hold_release_window_ms:
+				_judge_hold_tail(i, false, now - float(note.end))
+			elif not lane_down[note.lane]:
 				_break_hold(i)
 		elif (note.state == "hold_missed" or note.state == "broken") and now > float(note.end) + hold_release_window_ms:
-			# The miss/break was already recorded; only retire the visual now.
-			note.state = "missed"
-			notes[i] = note
-			note_state_changed.emit(i, note.duplicate())
+			# Head miss/body break leaves a separate tail judgement pending.
+			_judge_hold_tail(i, false, now - float(note.end))
 
 func _complete_hold(index: int) -> void:
 	var note: Dictionary = notes[index]
 	if note.state != "holding":
 		return
+	_judge_hold_tail(index, true, float(note.get("tail_error_ms", 0.0)))
+
+func _judge_hold_tail(index: int, hit: bool, timing_error_ms := 0.0) -> void:
+	var note: Dictionary = notes[index]
+	if bool(note.get("tail_judged", false)):
+		return
+	note.tail_judged = true
+	note.tail_error_ms = timing_error_ms
+	if not hit:
+		note.state = "missed"
+		notes[index] = note
+		note_state_changed.emit(index, note.duplicate())
+		combo = 0
+		_record_judgement("Miss", 0, 0.0, timing_error_ms)
+		return
+
+	# osu!mania lazer judges the tail separately. A missed head or body break
+	# caps a successfully released tail at Meh, but does not erase that tail
+	# judgement entirely.
+	var tail_error := absf(timing_error_ms)
+	var judgement := "Meh"
+	var tail_points := 50
+	var tail_accuracy := 1.0 / 6.0
+	if not bool(note.get("hold_broken", false)):
+		if tail_error <= perfect_window_ms:
+			judgement = "Perfect"
+			tail_points = 320
+			tail_accuracy = 1.0
+		elif tail_error <= great_window_ms:
+			judgement = "Great"
+			tail_points = 300
+			tail_accuracy = 1.0
+		elif tail_error <= good_window_ms:
+			judgement = "Good"
+			tail_points = 200
+			tail_accuracy = 2.0 / 3.0
+		elif tail_error <= ok_window_ms:
+			judgement = "OK"
+			tail_points = 100
+			tail_accuracy = 1.0 / 3.0
 	note.state = "completed"
 	notes[index] = note
 	note_state_changed.emit(index, note.duplicate())
-	if not bool(note.get("hold_broken", false)):
-		var tail_error := absf(float(note.get("tail_error_ms", 0.0)))
-		var tail_points := 50
-		var tail_accuracy := 1.0 / 6.0
-		if tail_error <= perfect_window_ms:
-			tail_points = 100
-			tail_accuracy = 1.0
-		elif tail_error <= great_window_ms:
-			tail_points = 90
-			tail_accuracy = 1.0
-		elif tail_error <= good_window_ms:
-			tail_points = 70
-			tail_accuracy = 2.0 / 3.0
-		elif tail_error <= ok_window_ms:
-			tail_points = 55
-			tail_accuracy = 1.0 / 3.0
-		combo += 1
-		best_combo = maxi(best_combo, combo)
-		_record_judgement("Hold OK", tail_points, tail_accuracy, float(note.get("tail_error_ms", 0.0)))
+	combo += 1
+	best_combo = maxi(best_combo, combo)
+	_record_judgement(judgement, tail_points, tail_accuracy, timing_error_ms)
 
 func _break_hold(index: int) -> void:
 	var note: Dictionary = notes[index]
@@ -1563,9 +1590,9 @@ func _break_hold(index: int) -> void:
 	note_state_changed.emit(index, note.duplicate())
 	combo = 0
 	if not was_already_broken:
-		_record_judgement("Hold Break", 0, 0.0, _song_time_ms() - float(note.end))
+		_record_judgement("Hold Break", 0, 0.0, _song_time_ms() - float(note.end), false)
 
-func _record_judgement(label: String, points: int, accuracy_value: float, timing_error_ms := 0.0) -> void:
+func _record_judgement(label: String, points: int, accuracy_value: float, timing_error_ms := 0.0, counts_toward_accuracy := true) -> void:
 	score += points
 	last_judgement = label
 	last_timing_error_ms = timing_error_ms
@@ -1575,8 +1602,9 @@ func _record_judgement(label: String, points: int, accuracy_value: float, timing
 		elif timing_error_ms > 0.0:
 			late_hit_count += 1
 	judgement_counts[label] = int(judgement_counts.get(label, 0)) + 1
-	accuracy_points += accuracy_value
-	accuracy_total += 1.0
+	if counts_toward_accuracy:
+		accuracy_points += accuracy_value
+		accuracy_total += 1.0
 	var health_delta := 0.0
 	match label:
 		"Perfect": health_delta = 2.0
@@ -1585,7 +1613,6 @@ func _record_judgement(label: String, points: int, accuracy_value: float, timing
 		"OK": health_delta = 0.1
 		"Meh": health_delta = -1.0
 		"Miss": health_delta = -14.0
-		"Hold OK": health_delta = 1.0
 		"Hold Break": health_delta = -8.0
 	_change_health(health_delta)
 	judgement_label.text = label
@@ -1639,6 +1666,7 @@ func _reset_run_state() -> void:
 		var note: Dictionary = notes[i]
 		note.state = "pending"
 		note.hold_broken = false
+		note.tail_judged = false
 		note.head_error_ms = 0.0
 		note.tail_error_ms = 0.0
 		notes[i] = note
@@ -1647,7 +1675,7 @@ func _reset_run_state() -> void:
 	best_combo = 0
 	accuracy_points = 0.0
 	accuracy_total = 0.0
-	judgement_counts = {"Perfect": 0, "Great": 0, "Good": 0, "OK": 0, "Meh": 0, "Miss": 0, "Hold OK": 0, "Hold Break": 0}
+	judgement_counts = {"Perfect": 0, "Great": 0, "Good": 0, "OK": 0, "Meh": 0, "Miss": 0, "Hold Break": 0}
 	last_judgement = ""
 	last_timing_error_ms = 0.0
 	early_hit_count = 0

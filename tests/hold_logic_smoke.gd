@@ -22,7 +22,7 @@ func run_test() -> void:
 		_fail("head press did not enter holding")
 		return
 
-	# Missing a hold head must record one Miss but keep a grey body/tail alive
+	# Missing a hold head records its own Miss but keeps a grey body/tail alive
 	# until the tail window expires, instead of making the whole note vanish.
 	scene.song_clock_ms = 1000.0
 	scene.notes = [{"lane": 0, "time": 1000, "end": 2000, "state": "pending"}]
@@ -40,12 +40,12 @@ func run_test() -> void:
 		return
 	scene.song_clock_ms = 2000.0 + scene.hold_release_window_ms + 1.0
 	scene._update_note_states()
-	if scene.notes[0].state != "missed" or int(scene.judgement_counts["Miss"]) != miss_count_before + 1:
-		_fail("missed hold did not retire after its tail window")
+	if scene.notes[0].state != "missed" or int(scene.judgement_counts["Miss"]) != miss_count_before + 2:
+		_fail("missed hold did not produce its separate tail Miss")
 		return
 
-	# A late re-press may hold the remaining body, but never changes the Miss
-	# into a successful head or awards an unbroken-tail bonus.
+	# A late re-press may hold the remaining body. It cannot change the head
+	# Miss, and its correctly released tail is capped at Meh.
 	scene.song_clock_ms = 1000.0 + scene.miss_window_ms + 1.0
 	scene.notes = [{"lane": 0, "time": 1000, "end": 2000, "state": "pending"}]
 	scene._update_note_states()
@@ -58,9 +58,10 @@ func run_test() -> void:
 		_fail("late re-press did not preserve the missed-head result")
 		return
 	scene.song_clock_ms = 2000.0
-	scene._update_note_states()
-	if scene.notes[0].state != "completed" or int(scene.score) != score_before or float(scene.accuracy_total) != accuracy_total_before:
-		_fail("re-pressed missed head was incorrectly awarded an unbroken tail")
+	scene.lane_down[0] = false
+	scene._judge_lane_up(0)
+	if scene.notes[0].state != "completed" or int(scene.score) != score_before + 50 or float(scene.accuracy_total) != accuracy_total_before + 1.0 or int(scene.judgement_counts["Meh"]) < 1:
+		_fail("re-pressed missed head did not receive a capped tail Meh")
 		return
 
 	# Reset the lane before checking early-release behaviour.
@@ -85,19 +86,22 @@ func run_test() -> void:
 		_fail("broken hold did not restore when re-pressed mid-body")
 		return
 	scene.song_clock_ms = 2000.0
-	scene._update_note_states()
-	if scene.notes[0].state != "completed" or int(scene.judgement_counts["Hold Break"]) != 1 or int(scene.judgement_counts["Hold OK"]) != 0:
+	scene.lane_down[0] = false
+	scene._judge_lane_up(0)
+	if scene.notes[0].state != "completed" or int(scene.judgement_counts["Hold Break"]) != 1 or int(scene.judgement_counts["Meh"]) < 2:
 		_fail("restored hold changed its original break result")
 		return
 
-	# A second hold kept through its tail must complete automatically.
+	# A second hold kept through its tail completes when the key is released.
 	scene.song_clock_ms = 1000.0
 	scene.notes = [{"lane": 1, "time": 1000, "end": 2000, "state": "pending"}]
 	scene.lane_down = [false, true, false, false]
 	scene._judge_lane_down(1)
 	scene.song_clock_ms = 2000.0
-	scene._update_note_states()
-	if scene.notes[0].state != "completed" or int(scene.judgement_counts["Hold OK"]) != 1:
+	scene.lane_down[1] = false
+	var perfect_before := int(scene.judgement_counts["Perfect"])
+	scene._judge_lane_up(1)
+	if scene.notes[0].state != "completed" or int(scene.judgement_counts["Perfect"]) != perfect_before + 1:
 		_fail("held note did not complete at its tail")
 		return
 

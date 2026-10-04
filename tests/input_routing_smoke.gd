@@ -51,7 +51,7 @@ func run_test() -> void:
 		_fail("hold did not restore after a mid-body re-press")
 		return
 	scene.song_clock_ms = 2000.0
-	scene._update_note_states()
+	scene._input(release)
 	if scene.notes[0].state != "completed":
 		_fail("hold did not complete at its tail")
 		return
