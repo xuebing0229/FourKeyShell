@@ -17,6 +17,9 @@ func run_test() -> void:
 		if not scene.playing or scene.notes.size() != examples[chart_path]:
 			push_error("Import failed: " + chart_path + " — " + scene.status_label.text)
 			quit(1)
+		if not scene.notes[0].has("sample_set") or not scene.notes[0].has("sample_filename"):
+			push_error("Import failed: hit sample metadata was not parsed")
+			quit(1)
 			return
 		scene.audio_player.stop()
 		print("IMPORT OK: ", chart_path.get_file(), " / ", scene.notes.size(), " notes / ", scene.audio_player.stream.get_length(), " sec")

@@ -44,5 +44,14 @@ func run_test() -> void:
 		_fail("timing calibration state did not expose the saved offset")
 		return
 
-	print("GAMEPLAY REGRESSION OK: failure stops audio, late window, offset state")
+	# Losing focus must not leave a phantom held lane when Windows drops key-up.
+	scene.playing = true
+	scene.paused = false
+	scene.lane_down = [true, false, false, false]
+	scene._notification(Window.NOTIFICATION_WM_WINDOW_FOCUS_OUT)
+	if scene.lane_down[0] or not scene.paused:
+		_fail("focus loss left a lane held or failed to pause")
+		return
+
+	print("GAMEPLAY REGRESSION OK: failure stops audio, late window, offset state, focus-safe input")
 	quit(0)

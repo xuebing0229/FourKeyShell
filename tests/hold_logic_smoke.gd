@@ -60,7 +60,7 @@ func run_test() -> void:
 	scene.song_clock_ms = 2000.0
 	scene.lane_down[0] = false
 	scene._judge_lane_up(0)
-	if scene.notes[0].state != "completed" or int(scene.score) != score_before + 50 or float(scene.accuracy_total) != accuracy_total_before + 1.0 or int(scene.judgement_counts["Meh"]) < 1:
+	if scene.notes[0].state != "completed" or int(scene.score) <= score_before or int(scene.score) > 1000000 or float(scene.accuracy_total) != accuracy_total_before + 1.0 or int(scene.judgement_counts["Meh"]) < 1:
 		_fail("re-pressed missed head did not receive a capped tail Meh")
 		return
 

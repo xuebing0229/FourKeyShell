@@ -27,6 +27,8 @@ signal preview_progress_changed(position_sec: float, duration_sec: float)
 signal preview_mode_changed(mode: int, label: String)
 signal health_changed(health: float, no_fail: bool, failed: bool)
 signal autoplay_changed(enabled: bool)
+signal timing_error_history_changed(history: Array)
+signal chart_quality_reported(report: Dictionary)
 
 const LANE_COUNT := 4
 const HIT_LINE_Y := 585.0
@@ -89,11 +91,16 @@ var combo := 0
 var best_combo := 0
 var accuracy_points := 0.0
 var accuracy_total := 0.0
+var score_accuracy_sum := 0.0
+var score_combo_sum := 0.0
+var score_max_combo_sum := 0.0
+var score_judgement_count := 0
 var judgement_counts := {"Perfect": 0, "Great": 0, "Good": 0, "OK": 0, "Meh": 0, "Miss": 0, "Hold Break": 0}
 var last_judgement := ""
 var last_timing_error_ms := 0.0
 var early_hit_count := 0
 var late_hit_count := 0
+var timing_error_history: Array[Dictionary] = []
 var practice_loop_start_ms := -1.0
 var practice_loop_end_ms := -1.0
 var key_labels := ["D", "F", "J", "K"]
@@ -145,6 +152,8 @@ var file_dialog: FileDialog
 var file_dialog_dir := ""
 var key_buttons: Array[Button] = []
 var chart_candidates: Array[Dictionary] = []
+var chart_quality_report: Dictionary = {"ok": true, "issues": []}
+var chart_sample_streams: Dictionary = {}
 
 func _ready() -> void:
 	_ensure_window_geometry()
@@ -264,6 +273,7 @@ func get_chart_metadata() -> Dictionary:
 		"duration_ms": chart_end_ms,
 		"timing_points": timing_points.duplicate(true),
 		"bpm": _initial_bpm(),
+		"quality": chart_quality_report.duplicate(true),
 	}
 
 func _initial_bpm() -> float:
@@ -296,7 +306,15 @@ func get_gameplay_snapshot() -> Dictionary:
 		"replay_playing": replay_playing,
 		"practice": practice_run,
 		"autoplay": autoplay_mode,
+		"timing_error_history": timing_error_history.duplicate(true),
+		"chart_quality": chart_quality_report.duplicate(true),
 	}
+
+func get_timing_error_history() -> Array:
+	return timing_error_history.duplicate(true)
+
+func get_chart_quality_report() -> Dictionary:
+	return chart_quality_report.duplicate(true)
 
 func get_personal_best() -> Dictionary:
 	for entry in personal_best_entries:
@@ -733,6 +751,9 @@ func _seek_practice_absolute(target: float) -> void:
 	best_combo = 0
 	accuracy_points = 0.0
 	accuracy_total = 0.0
+	_reset_score_tracking()
+	timing_error_history.clear()
+	timing_error_history_changed.emit(get_timing_error_history())
 	judgement_counts = {"Perfect": 0, "Great": 0, "Good": 0, "OK": 0, "Meh": 0, "Miss": 0, "Hold Break": 0}
 	last_judgement = ""
 	last_timing_error_ms = 0.0
@@ -1091,8 +1112,20 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
 		cancel_timing_calibration()
 		stop_preview()
+		# Windows may not deliver key-up events while the app is unfocused.
+		# Clear the logical state now; focus-in will restore only keys that are
+		# physically still held, preventing phantom long-note holds.
+		lane_down = [false, false, false, false]
 		if playing and not paused:
 			_toggle_pause()
+	elif what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
+		_sync_lane_state_from_hardware()
+
+func _sync_lane_state_from_hardware() -> void:
+	if not playing or paused or replay_playing or autoplay_mode:
+		return
+	for lane in LANE_COUNT:
+		lane_down[lane] = Input.is_key_pressed(key_codes[lane])
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not event is InputEventKey:
@@ -1332,6 +1365,9 @@ func _load_chart(path: String) -> void:
 			timing_points.append(point)
 	notes = parsed.notes
 	chart_source_path = path
+	chart_sample_streams.clear()
+	chart_quality_report = _inspect_chart_quality(notes)
+	chart_quality_reported.emit(chart_quality_report.duplicate(true))
 	replay_state_changed.emit(replay_complete_available and last_replay_path == chart_source_path, false)
 	song_title = parsed.title if parsed.title != "" else path.get_file().get_basename()
 	song_artist = parsed.artist
@@ -1354,6 +1390,9 @@ func _load_chart(path: String) -> void:
 	best_combo = 0
 	accuracy_points = 0.0
 	accuracy_total = 0.0
+	_reset_score_tracking()
+	timing_error_history.clear()
+	timing_error_history_changed.emit(get_timing_error_history())
 	judgement_counts = {"Perfect": 0, "Great": 0, "Good": 0, "OK": 0, "Meh": 0, "Miss": 0, "Hold Break": 0}
 	last_judgement = ""
 	last_timing_error_ms = 0.0
@@ -1365,7 +1404,11 @@ func _load_chart(path: String) -> void:
 	lane_down = [false, false, false, false]
 	pause_label.visible = false
 	result_label.visible = false
-	_set_status("已载入：" + song_title + "  |  " + song_artist)
+	var quality_issues: Array = chart_quality_report.get("issues", [])
+	var quality_suffix := ""
+	if not quality_issues.is_empty():
+		quality_suffix = "  |  提示：" + str(quality_issues[0])
+	_set_status("已载入：" + song_title + "  |  " + song_artist + quality_suffix)
 	_update_progress()
 	_remember_chart(recent_path_override if recent_path_override != "" else path)
 	recent_path_override = ""
@@ -1428,6 +1471,23 @@ func _parse_osu(text: String) -> Dictionary:
 			var end_time := time
 			if kind & 128 and fields.size() >= 6:
 				end_time = int(fields[5].split(":")[0])
+			var sample_set := 0
+			var addition_set := 0
+			var custom_index := 0
+			var sample_volume := 0
+			var sample_filename := ""
+			if fields.size() >= 6:
+				var sample_fields := fields[5].split(":")
+				if sample_fields.size() > 0 and sample_fields[0] != "":
+					sample_set = int(sample_fields[0])
+				if sample_fields.size() > 1 and sample_fields[1] != "":
+					addition_set = int(sample_fields[1])
+				if sample_fields.size() > 2 and sample_fields[2] != "":
+					custom_index = int(sample_fields[2])
+				if sample_fields.size() > 3 and sample_fields[3] != "":
+					sample_volume = int(sample_fields[3])
+				if sample_fields.size() > 4:
+					sample_filename = sample_fields[4].strip_edges()
 			result.notes.append({
 				"lane": clampi(int(float(x) / 512.0 * 4.0), 0, 3),
 				"time": time,
@@ -1438,9 +1498,34 @@ func _parse_osu(text: String) -> Dictionary:
 				"head_error_ms": 0.0,
 				"tail_error_ms": 0.0,
 				"hit_sound": kind >> 2 & 7,
+				"sample_set": sample_set,
+				"addition_set": addition_set,
+				"custom_index": custom_index,
+				"sample_volume": sample_volume,
+				"sample_filename": sample_filename,
 			})
 	result.notes.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.time < b.time)
 	return result
+
+func _inspect_chart_quality(chart_notes: Array) -> Dictionary:
+	var issues: Array[String] = []
+	var last_end_by_lane := [-1.0, -1.0, -1.0, -1.0]
+	var previous_time_by_lane := [-1.0, -1.0, -1.0, -1.0]
+	for raw_note in chart_notes:
+		var note: Dictionary = raw_note
+		var lane := clampi(int(note.get("lane", -1)), 0, LANE_COUNT - 1)
+		var start := float(note.get("time", 0.0))
+		var end := float(note.get("end", start))
+		if start < last_end_by_lane[lane]:
+			if issues.size() < 8:
+				issues.append("轨道 %d 存在长键重叠" % (lane + 1))
+		if start == previous_time_by_lane[lane] and issues.size() < 8:
+			issues.append("轨道 %d 存在同刻重复音符" % (lane + 1))
+		previous_time_by_lane[lane] = start
+		last_end_by_lane[lane] = maxf(last_end_by_lane[lane], end)
+	if chart_notes.is_empty():
+		issues.append("谱面没有可玩的音符")
+	return {"ok": issues.is_empty(), "issues": issues, "checked_notes": chart_notes.size()}
 
 func _load_audio(path: String) -> AudioStream:
 	var lower := path.to_lower()
@@ -1525,7 +1610,7 @@ func _judge_lane_down(lane: int, forced_time_ms := -1.0e30) -> void:
 	combo += 1
 	best_combo = maxi(best_combo, combo)
 	target.head_error_ms = now - float(target.time)
-	_record_judgement(judgement, points, accuracy_value, now - float(target.time))
+	_record_judgement(judgement, points, accuracy_value, now - float(target.time), true, target)
 	if target.end > target.time:
 		target.state = "holding"
 	else:
@@ -1566,7 +1651,7 @@ func _update_note_states() -> void:
 			notes[i] = note
 			note_state_changed.emit(i, note.duplicate())
 			combo = 0
-			_record_judgement("Miss", 0, 0.0)
+			_record_judgement("Miss", 0, 0.0, 0.0, true, note)
 		elif note.state == "holding" and now >= float(note.end):
 			# The tail is judged on key-up. If the key-up was lost before the
 			# tail, record the body break; never auto-complete a held key here.
@@ -1595,7 +1680,7 @@ func _judge_hold_tail(index: int, hit: bool, timing_error_ms := 0.0) -> void:
 		notes[index] = note
 		note_state_changed.emit(index, note.duplicate())
 		combo = 0
-		_record_judgement("Miss", 0, 0.0, timing_error_ms)
+		_record_judgement("Miss", 0, 0.0, timing_error_ms, true, note)
 		return
 
 	# osu!mania lazer judges the tail separately. A missed head or body break
@@ -1627,7 +1712,7 @@ func _judge_hold_tail(index: int, hit: bool, timing_error_ms := 0.0) -> void:
 	note_state_changed.emit(index, note.duplicate())
 	combo += 1
 	best_combo = maxi(best_combo, combo)
-	_record_judgement(judgement, tail_points, tail_accuracy, timing_error_ms)
+	_record_judgement(judgement, tail_points, tail_accuracy, timing_error_ms, true, note)
 
 func _break_hold(index: int) -> void:
 	var note: Dictionary = notes[index]
@@ -1640,10 +1725,9 @@ func _break_hold(index: int) -> void:
 	note_state_changed.emit(index, note.duplicate())
 	combo = 0
 	if not was_already_broken:
-		_record_judgement("Hold Break", 0, 0.0, _song_time_ms() - float(note.end), false)
+		_record_judgement("Hold Break", 0, 0.0, _song_time_ms() - float(note.end), false, note)
 
-func _record_judgement(label: String, points: int, accuracy_value: float, timing_error_ms := 0.0, counts_toward_accuracy := true) -> void:
-	score += points
+func _record_judgement(label: String, points: int, accuracy_value: float, timing_error_ms := 0.0, counts_toward_accuracy := true, sample_note: Dictionary = {}) -> void:
 	last_judgement = label
 	last_timing_error_ms = timing_error_ms
 	if label != "Miss":
@@ -1655,6 +1739,20 @@ func _record_judgement(label: String, points: int, accuracy_value: float, timing
 	if counts_toward_accuracy:
 		accuracy_points += accuracy_value
 		accuracy_total += 1.0
+		score_judgement_count += 1
+		score_accuracy_sum += clampf(accuracy_value, 0.0, 1.0)
+		score_combo_sum += float(combo)
+		score_max_combo_sum += float(score_judgement_count)
+		if label != "Miss":
+			var history_entry := {
+				"error_ms": timing_error_ms,
+				"label": label,
+				"song_time_ms": _song_time_ms(),
+			}
+			timing_error_history.append(history_entry)
+			while timing_error_history.size() > 120:
+				timing_error_history.pop_front()
+			timing_error_history_changed.emit(get_timing_error_history())
 	var health_delta := 0.0
 	match label:
 		"Perfect": health_delta = 2.0
@@ -1667,7 +1765,8 @@ func _record_judgement(label: String, points: int, accuracy_value: float, timing
 	_change_health(health_delta)
 	judgement_label.text = label
 	judgement_label.modulate = Color("8ee6b2") if accuracy_value >= 0.8 else Color("ffcf73") if accuracy_value > 0.0 else Color("ff8585")
-	_play_hit_sound(label)
+	_refresh_score()
+	_play_hit_sound(label, sample_note)
 	judgement_made.emit({
 		"label": label,
 		"points": points,
@@ -1682,6 +1781,21 @@ func _record_judgement(label: String, points: int, accuracy_value: float, timing
 		"timing_text": _timing_text(timing_error_ms),
 		"song_time_ms": _song_time_ms(),
 	})
+
+func _reset_score_tracking() -> void:
+	score = 0
+	score_accuracy_sum = 0.0
+	score_combo_sum = 0.0
+	score_max_combo_sum = 0.0
+	score_judgement_count = 0
+
+func _refresh_score() -> void:
+	if score_judgement_count <= 0 or score_max_combo_sum <= 0.0:
+		score = 0
+		return
+	var accuracy_component := score_accuracy_sum / float(score_judgement_count)
+	var combo_component := score_combo_sum / score_max_combo_sum
+	score = clampi(int(round((accuracy_component * 0.5 + combo_component * 0.5) * 1000000.0)), 0, 1000000)
 
 func _toggle_pause() -> void:
 	if not playing:
@@ -1725,6 +1839,9 @@ func _reset_run_state() -> void:
 	best_combo = 0
 	accuracy_points = 0.0
 	accuracy_total = 0.0
+	_reset_score_tracking()
+	timing_error_history.clear()
+	timing_error_history_changed.emit(get_timing_error_history())
 	judgement_counts = {"Perfect": 0, "Great": 0, "Good": 0, "OK": 0, "Meh": 0, "Miss": 0, "Hold Break": 0}
 	last_judgement = ""
 	last_timing_error_ms = 0.0
@@ -1807,19 +1924,18 @@ func _accuracy_percent() -> float:
 	return accuracy_points / accuracy_total * 100.0
 
 func _grade_for_accuracy(value: float) -> String:
-	if value >= 99.0:
+	# osu!mania uses SS for 100% and strict boundaries for the other grades.
+	if value >= 99.999:
 		return "SS"
-	if value >= 95.0:
+	if value > 95.0:
 		return "S"
-	if value >= 90.0:
+	if value > 90.0:
 		return "A"
-	if value >= 80.0:
+	if value > 80.0:
 		return "B"
-	if value >= 70.0:
+	if value > 70.0:
 		return "C"
-	if value >= 60.0:
-		return "D"
-	return "F"
+	return "D"
 
 func _timing_text(error_ms: float) -> String:
 	if absf(error_ms) < 0.5:
@@ -1878,16 +1994,56 @@ func _load_audio_buffer(path: String, data: PackedByteArray) -> AudioStream:
 		return AudioStreamWAV.load_from_buffer(data)
 	return null
 
-func _play_hit_sound(label: String) -> void:
+func _play_hit_sound(label: String, note: Dictionary = {}) -> void:
 	if not hit_sounds_enabled or hit_sound_players.is_empty():
 		return
-	var stream: AudioStream = hit_sound_streams.get(label, hit_sound_streams.get("Good"))
+	var stream: AudioStream = _sample_stream_for_note(note)
+	if stream == null:
+		stream = hit_sound_streams.get(label, hit_sound_streams.get("Good"))
 	if stream == null:
 		return
 	var player := hit_sound_players[hit_sound_cursor % hit_sound_players.size()]
 	hit_sound_cursor = (hit_sound_cursor + 1) % hit_sound_players.size()
+	var base_level := linear_to_db(maxf(volume_percent / 100.0, 0.0001)) - 10.0
+	var sample_volume := int(note.get("sample_volume", 0)) if not note.is_empty() else 0
+	player.volume_db = base_level + (linear_to_db(maxf(sample_volume / 100.0, 0.0001)) if sample_volume > 0 else 0.0)
 	player.stream = stream
 	player.play()
+
+func _sample_stream_for_note(note: Dictionary) -> AudioStream:
+	if note.is_empty():
+		return null
+	var filename := str(note.get("sample_filename", "")).replace("\\", "/")
+	if filename != "":
+		var sample_path := chart_source_path.get_base_dir().path_join(filename)
+		if chart_sample_streams.has(sample_path):
+			return chart_sample_streams[sample_path]
+		if FileAccess.file_exists(sample_path):
+			var custom_stream := _load_audio(sample_path)
+			if custom_stream != null:
+				chart_sample_streams[sample_path] = custom_stream
+				return custom_stream
+	# When a chart requests a non-default sample set or addition but does not
+	# ship a custom file, provide a distinct fallback instead of silently
+	# reducing every note to the same judgement beep.
+	var sample_set := int(note.get("sample_set", 0))
+	var addition_set := int(note.get("addition_set", 0))
+	var hit_sound := int(note.get("hit_sound", 0))
+	if sample_set == 0 and addition_set == 0 and hit_sound == 0:
+		return null
+	var key := "generated:%d:%d:%d" % [sample_set, addition_set, hit_sound]
+	if chart_sample_streams.has(key):
+		return chart_sample_streams[key]
+	var frequency := 620.0 + float(sample_set) * 90.0 + float(addition_set) * 35.0
+	if hit_sound & 1:
+		frequency += 100.0
+	if hit_sound & 2:
+		frequency += 180.0
+	if hit_sound & 4:
+		frequency += 260.0
+	var generated := _make_hit_sound(frequency)
+	chart_sample_streams[key] = generated
+	return generated
 
 func _record_personal_best(result: Dictionary) -> bool:
 	var current := get_personal_best()

@@ -34,6 +34,22 @@ func run_test() -> void:
 	if not scene.get_gameplay_snapshot().get("practice", false):
 		_fail("autoplay run was not marked as non-recorded practice")
 		return
+	if int(scene.score) != 1000000 or str(scene.get_gameplay_snapshot().get("grade", "")) != "SS":
+		_fail("a full autoplay run did not produce a normalized 1,000,000 / SS result")
+		return
+	if scene.get_timing_error_history().size() != 3:
+		_fail("timing error history did not retain head and tail judgements")
+		return
+	var quality: Dictionary = scene._inspect_chart_quality([
+		{"lane": 0, "time": 1000, "end": 1400},
+		{"lane": 0, "time": 1200, "end": 1200},
+	])
+	if bool(quality.get("ok", true)) or quality.get("issues", []).is_empty():
+		_fail("chart quality inspection did not report an overlapping lane")
+		return
+	if scene._grade_for_accuracy(99.0) != "S" or scene._grade_for_accuracy(95.0) != "A" or scene._grade_for_accuracy(100.0) != "SS":
+		_fail("mania grade boundaries are not strict")
+		return
 
-	print("MATURE GAMEPLAY OK: autoplay uses normal head/tail paths")
+	print("MATURE GAMEPLAY OK: autoplay uses normal head/tail paths, normalized score and error history")
 	quit(0)

@@ -1,5 +1,25 @@
 extends Control
 
+class TimingErrorStrip extends Control:
+	var entries: Array = []
+	const WINDOW_MS := 150.0
+
+	func set_entries(value: Array) -> void:
+		entries = value.duplicate(true)
+		queue_redraw()
+
+	func _draw() -> void:
+		var center := size.x * 0.5
+		var mid_y := size.y * 0.5
+		draw_line(Vector2(0, mid_y), Vector2(size.x, mid_y), Color("405577"), 2.0)
+		draw_line(Vector2(center, 1), Vector2(center, size.y - 1), Color("eef4ff"), 1.0)
+		for entry in entries:
+			var error_ms := float(entry.get("error_ms", 0.0))
+			var x := clampf(center + error_ms / WINDOW_MS * center, 2.0, size.x - 2.0)
+			var label := str(entry.get("label", ""))
+			var color := Color("72e3c0") if label == "Perfect" or label == "Great" else Color("ffd166") if label == "Good" or label == "OK" else Color("ff8585")
+			draw_circle(Vector2(x, mid_y), 3.0, color)
+
 enum Page { HOME, LIBRARY, ACHIEVEMENTS, SETTINGS, GAMEPLAY, RESULTS }
 
 const NAV_WIDTH := 236.0
@@ -77,6 +97,7 @@ var health_bar: ProgressBar
 var health_status: Label
 var judgement_label: Label
 var timing_feedback_label: Label
+var timing_error_strip: TimingErrorStrip
 var game_status: Label
 var game_progress: ProgressBar
 var chart_selector: OptionButton
@@ -118,6 +139,8 @@ func attach_shell(runtime: Control) -> void:
 	shell.preview_changed.connect(_on_preview_changed)
 	shell.preview_progress_changed.connect(_on_preview_progress_changed)
 	shell.preview_mode_changed.connect(_on_preview_mode_changed)
+	shell.timing_error_history_changed.connect(_on_timing_error_history_changed)
+	shell.chart_quality_reported.connect(_on_chart_quality_reported)
 	shell.set_default_playfield_visible(false)
 	if volume_slider != null:
 		volume_slider.value = shell.get_volume_percent()
@@ -136,6 +159,7 @@ func attach_shell(runtime: Control) -> void:
 	var replay_info: Dictionary = shell.get_replay_info()
 	_on_replay_state_changed(bool(replay_info.get("available", false)), bool(replay_info.get("playing", false)))
 	_refresh_preview_controls()
+	_on_timing_error_history_changed(shell.get_timing_error_history())
 	_show_page(Page.HOME)
 
 func _build_visual_shell() -> void:
@@ -390,6 +414,15 @@ func _build_gameplay_page() -> void:
 	judgement_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	timing_feedback_label = _label(gameplay_page, "", Vector2(455, 58), Vector2(170, 22), 12, MUTED)
 	timing_feedback_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	timing_error_strip = TimingErrorStrip.new()
+	timing_error_strip.position = Vector2(445, 86)
+	timing_error_strip.size = Vector2(190, 18)
+	timing_error_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gameplay_page.add_child(timing_error_strip)
+	var timing_error_hint := _label(gameplay_page, "早", Vector2(426, 84), Vector2(20, 20), 10, MUTED)
+	timing_error_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var timing_late_hint := _label(gameplay_page, "晚", Vector2(635, 84), Vector2(20, 20), 10, MUTED)
+	timing_late_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	game_score = _label(gameplay_page, "SCORE 000000\nCOMBO 0\nACC 0.00%", Vector2(884, 24), Vector2(185, 66), 14, TEXT)
 	health_status = _label(gameplay_page, "LIFE 100%", Vector2(650, 24), Vector2(110, 20), 12, TEXT)
 	health_bar = ProgressBar.new()
@@ -809,6 +842,8 @@ func _on_gameplay_started(metadata: Dictionary) -> void:
 	_on_health_changed(float(shell.get_health()), bool(shell.get_no_fail_mode()), false)
 	judgement_label.text = ""
 	timing_feedback_label.text = ""
+	if timing_error_strip != null:
+		timing_error_strip.set_entries([])
 	if pause_overlay != null:
 		pause_overlay.visible = false
 	_show_page(Page.GAMEPLAY)
@@ -824,6 +859,18 @@ func _on_judgement_made(judgement: Dictionary) -> void:
 	timing_feedback_label.modulate = ACCENT if absf(float(judgement.get("timing_error_ms", 0.0))) <= 45.0 else WARNING
 	game_score.text = "SCORE %06d\nCOMBO %d\nACC %.2f%%" % [judgement.get("score", 0), judgement.get("combo", 0), judgement.get("accuracy", 0.0)]
 	_on_health_changed(float(judgement.get("health", shell.get_health())), bool(judgement.get("no_fail", shell.get_no_fail_mode())), bool(judgement.get("failed", false)))
+
+func _on_timing_error_history_changed(history: Array) -> void:
+	if timing_error_strip != null:
+		timing_error_strip.set_entries(history)
+
+func _on_chart_quality_reported(report: Dictionary) -> void:
+	if status_label == null:
+		return
+	var issues: Array = report.get("issues", [])
+	if issues.is_empty():
+		return
+	status_label.text = "谱面提示：" + str(issues[0])
 
 func _on_progress_changed(progress: float, _song_time_ms: float, _duration_ms: float) -> void:
 	if game_progress != null:

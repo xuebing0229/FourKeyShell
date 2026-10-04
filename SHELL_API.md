@@ -11,6 +11,8 @@
 - `retry_run()`：重置当前演奏。
 - `get_chart_metadata()`：返回标题、作者、OverallDifficulty、判定窗口、TimingPoints/BPM、音符数、长键数和时长。
 - `get_gameplay_snapshot()`：返回当前分数、连击、准确率、血量、失败状态、时间和音符状态。
+- `get_timing_error_history()`：返回最近 120 次计入准确率的击打误差记录，包含 `error_ms`、`label` 和 `song_time_ms`。
+- `get_chart_quality_report()`：返回当前谱面的导入检查结果；`issues` 可能包含同轨道长键重叠、同刻重复音符或空谱面提示。
 - `get_personal_best()`：返回当前谱面的本地最佳成绩；没有记录时返回空字典。
 - `get_personal_bests()`：返回所有谱面的本地最佳成绩，供成就/成绩页面展示。
 - `get_lane_bindings()`：返回四条轨道的键位名称。
@@ -43,7 +45,7 @@
 - `chart_load_failed(message)`：谱面载入失败。
 - `gameplay_started(metadata)`：开始一局。
 - `gameplay_paused(is_paused)`：暂停状态变化。
-- `judgement_made(judgement)`：Perfect/Great/Good/OK/Meh/Miss/Hold Break 结果，同时包含 `timing_error_ms`、`timing_text` 和 `health`；长键尾部使用普通 Perfect/Great/Good/OK/Meh/Miss 判定，身体断连只作为不计准确率的 Hold Break 事件。
+- `judgement_made(judgement)`：Perfect/Great/Good/OK/Meh/Miss/Hold Break 结果，同时包含 `timing_error_ms`、`timing_text` 和 `health`；长键尾部使用普通 Perfect/Great/Good/OK/Meh/Miss 判定，身体断连只作为不计准确率的 Hold Break 事件。分数在此信号中已经是 0–1,000,000 归一化结果。
 - `note_state_changed(note_index, note)`：单个音符变为 holding、completed、missed、hold_missed 或 broken。`hold_missed` 表示头部已漏按但本体/尾部尚未结束，仍需显示；`broken` 表示已按中的长键提前松开。两者都可以重新按住剩余部分，但 `hold_broken` 会保留，尾部最高只能为 Meh。
 - `progress_changed(progress, song_time_ms, duration_ms)`：播放进度变化。
 - `gameplay_finished(result)`：结算完成。
@@ -65,6 +67,8 @@
 - `replay_state_changed(available, playing)`：最近回放可用性或播放状态变化。
 - `health_changed(health, no_fail, failed)`：血量、练习模式或失败状态变化；按住未断连的长键身体时会缓慢恢复血量。
 - `autoplay_changed(enabled)`：自动演示状态变化。
+- `timing_error_history_changed(history)`：最近击打误差历史变化，适合绘制 hit-error bar。
+- `chart_quality_reported(report)`：载入谱面后的质量提示；报告不会阻止谱面播放。
 
 UI 可以只订阅这些信号，再把数据显示到自己的场景中。
 
