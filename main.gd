@@ -93,7 +93,6 @@ var accuracy_points := 0.0
 var accuracy_total := 0.0
 var score_accuracy_sum := 0.0
 var score_combo_sum := 0.0
-var score_max_combo_sum := 0.0
 var score_judgement_count := 0
 var judgement_counts := {"Perfect": 0, "Great": 0, "Good": 0, "OK": 0, "Meh": 0, "Miss": 0, "Hold Break": 0}
 var last_judgement := ""
@@ -1740,9 +1739,8 @@ func _record_judgement(label: String, points: int, accuracy_value: float, timing
 		accuracy_points += accuracy_value
 		accuracy_total += 1.0
 		score_judgement_count += 1
-		score_accuracy_sum += clampf(accuracy_value, 0.0, 1.0)
-		score_combo_sum += float(combo)
-		score_max_combo_sum += float(score_judgement_count)
+		score_accuracy_sum += _score_base_for_label(label)
+		score_combo_sum += _score_combo_change(label, combo)
 		if label != "Miss":
 			var history_entry := {
 				"error_ms": timing_error_ms,
@@ -1786,16 +1784,59 @@ func _reset_score_tracking() -> void:
 	score = 0
 	score_accuracy_sum = 0.0
 	score_combo_sum = 0.0
-	score_max_combo_sum = 0.0
 	score_judgement_count = 0
 
 func _refresh_score() -> void:
-	if score_judgement_count <= 0 or score_max_combo_sum <= 0.0:
+	var max_objects := _score_max_objects()
+	if score_judgement_count <= 0 or max_objects <= 0:
 		score = 0
 		return
-	var accuracy_component := score_accuracy_sum / float(score_judgement_count)
-	var combo_component := score_combo_sum / score_max_combo_sum
-	score = clampi(int(round((accuracy_component * 0.5 + combo_component * 0.5) * 1000000.0)), 0, 1000000)
+	var current_accuracy := score_accuracy_sum / (305.0 * float(score_judgement_count))
+	var accuracy_progress := float(score_judgement_count) / float(max_objects)
+	var max_combo_score := _score_max_combo_value(max_objects)
+	var combo_progress := score_combo_sum / max_combo_score if max_combo_score > 0.0 else 1.0
+	# Core osu!mania lazer score formula: 150k combo portion plus 850k
+	# accuracy portion, with the accuracy exponent and progress weighting.
+	score = clampi(int(round(150000.0 * combo_progress + 850000.0 * pow(current_accuracy, 2.0 + 2.0 * current_accuracy) * accuracy_progress)), 0, 1000000)
+
+func _score_max_objects() -> int:
+	var total := 0
+	for raw_note in notes:
+		var note: Dictionary = raw_note
+		total += 2 if float(note.get("end", note.get("time", 0.0))) > float(note.get("time", 0.0)) else 1
+	return total
+
+func _score_base_for_label(label: String) -> float:
+	match label:
+		"Perfect":
+			return 305.0
+		"Great":
+			return 300.0
+		"Good":
+			return 200.0
+		"OK":
+			return 100.0
+		"Meh":
+			return 50.0
+		_:
+			return 0.0
+
+func _score_combo_change(label: String, combo_after: int) -> float:
+	var base := _score_base_for_label(label)
+	if base <= 0.0:
+		return 0.0
+	var combo_multiplier := 0.5
+	if combo_after > 1:
+		combo_multiplier = minf(maxf(log(float(combo_after)) / log(4.0), 0.5), log(400.0) / log(4.0))
+	return (300.0 if label == "Perfect" else base) * combo_multiplier
+
+func _score_max_combo_value(object_count: int) -> float:
+	if object_count <= 0:
+		return 0.0
+	var total := 0.0
+	for combo_after in range(1, object_count + 1):
+		total += _score_combo_change("Perfect", combo_after)
+	return total
 
 func _toggle_pause() -> void:
 	if not playing:
