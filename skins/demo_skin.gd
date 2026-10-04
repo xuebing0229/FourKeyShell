@@ -66,6 +66,7 @@ var volume_slider: HSlider
 var speed_slider: HSlider
 var hit_sounds_toggle: CheckButton
 var no_fail_toggle: CheckButton
+var autoplay_toggle: CheckButton
 var offset_label: Label
 
 var gameplay_page: Control
@@ -107,6 +108,7 @@ func attach_shell(runtime: Control) -> void:
 	shell.volume_changed.connect(_on_volume_changed)
 	shell.hit_sounds_changed.connect(_on_hit_sounds_changed)
 	shell.health_changed.connect(_on_health_changed)
+	shell.autoplay_changed.connect(_on_autoplay_changed)
 	shell.scroll_speed_changed.connect(_on_scroll_speed_changed)
 	shell.recent_charts_changed.connect(_on_recent_charts_changed)
 	shell.library_changed.connect(_on_library_changed)
@@ -125,6 +127,8 @@ func attach_shell(runtime: Control) -> void:
 		hit_sounds_toggle.button_pressed = shell.get_hit_sounds_enabled()
 	if no_fail_toggle != null:
 		no_fail_toggle.button_pressed = shell.get_no_fail_mode()
+	if autoplay_toggle != null:
+		autoplay_toggle.button_pressed = shell.get_autoplay_mode()
 	_refresh_bindings()
 	_refresh_library()
 	_refresh_home()
@@ -354,6 +358,11 @@ func _build_settings_page() -> void:
 	no_fail_toggle.position = Vector2(20, 438)
 	no_fail_toggle.toggled.connect(_toggle_no_fail)
 	controls.add_child(no_fail_toggle)
+	autoplay_toggle = CheckButton.new()
+	autoplay_toggle.text = "自动演示（不计成绩）"
+	autoplay_toggle.position = Vector2(20, 470)
+	autoplay_toggle.toggled.connect(_toggle_autoplay)
+	controls.add_child(autoplay_toggle)
 	var timing := _panel(settings_page, Vector2(670, 160), Vector2(400, 220), SURFACE, 18)
 	_label(timing, "AUDIO TIMING", Vector2(22, 22), Vector2(220, 18), 11, ACCENT_2)
 	_label(timing, "全局偏移", Vector2(22, 58), Vector2(130, 22), 15, TEXT)
@@ -886,9 +895,18 @@ func _toggle_no_fail(enabled: bool) -> void:
 		shell.set_no_fail_mode(enabled)
 		settings_status.text = "练习模式：" + ("开启" if enabled else "关闭")
 
+func _toggle_autoplay(enabled: bool) -> void:
+	if shell != null:
+		shell.set_autoplay_mode(enabled)
+		settings_status.text = "自动演示：" + ("开启（不计成绩）" if enabled else "关闭")
+
 func _on_hit_sounds_changed(value: bool) -> void:
 	if hit_sounds_toggle != null:
 		hit_sounds_toggle.button_pressed = value
+
+func _on_autoplay_changed(value: bool) -> void:
+	if autoplay_toggle != null:
+		autoplay_toggle.button_pressed = value
 
 func _on_health_changed(value: float, no_fail: bool, failed: bool) -> void:
 	if health_bar != null:

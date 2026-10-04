@@ -22,6 +22,7 @@
 - `get_hit_sounds_enabled()` / `set_hit_sounds_enabled(enabled)`：读取或切换内置判定音效，并保存到用户配置。
 - `get_health()`：读取当前血量。
 - `get_no_fail_mode()` / `set_no_fail_mode(enabled)`：读取或切换练习模式；练习模式不会因血量归零结束。
+- `get_autoplay_mode()` / `set_autoplay_mode(enabled)`：开启或关闭自动演示；自动演示复用正常头尾判定、血量和事件，但本局标记为练习，不写入本地最佳成绩。
 - `toggle_fullscreen()`：切换全屏并返回切换后的状态。
 - `get_scroll_speed_percent()` / `set_scroll_speed_percent(value)`：读取或设置 50–200% 下落速度，并保存到用户配置。
 - `get_recent_charts()` / `clear_recent_charts()`：读取或清空最近打开的谱面路径。
@@ -62,7 +63,8 @@
 - `preview_progress_changed(position_sec, duration_sec)`：试听进度更新。
 - `preview_mode_changed(mode, label)`：试听播放模式更新。
 - `replay_state_changed(available, playing)`：最近回放可用性或播放状态变化。
-- `health_changed(health, no_fail, failed)`：血量、练习模式或失败状态变化。
+- `health_changed(health, no_fail, failed)`：血量、练习模式或失败状态变化；按住未断连的长键身体时会缓慢恢复血量。
+- `autoplay_changed(enabled)`：自动演示状态变化。
 
 UI 可以只订阅这些信号，再把数据显示到自己的场景中。
 

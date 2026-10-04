@@ -26,6 +26,7 @@ signal preview_changed(active: bool, label: String)
 signal preview_progress_changed(position_sec: float, duration_sec: float)
 signal preview_mode_changed(mode: int, label: String)
 signal health_changed(health: float, no_fail: bool, failed: bool)
+signal autoplay_changed(enabled: bool)
 
 const LANE_COUNT := 4
 const HIT_LINE_Y := 585.0
@@ -38,6 +39,7 @@ const GOOD_WINDOW_MS := 82.0
 const OK_WINDOW_MS := 112.0
 const MEH_WINDOW_MS := 136.0
 const HOLD_RELEASE_WINDOW_MS := 120.0
+const HOLD_HEALTH_REGEN_PER_SECOND := 3.0
 const LANE_WIDTH := 150.0
 const DEFAULT_APPROACH_MS := 1800.0
 const CONFIG_PATH := "user://four_key_shell.cfg"
@@ -117,6 +119,7 @@ var replay_complete_available := false
 var run_offset_ms := 0.0
 var health := MAX_HEALTH
 var no_fail_mode := true
+var autoplay_mode := false
 var failed := false
 var finish_queued := false
 var recent_charts: Array[String] = []
@@ -292,6 +295,7 @@ func get_gameplay_snapshot() -> Dictionary:
 		"notes": public_notes,
 		"replay_playing": replay_playing,
 		"practice": practice_run,
+		"autoplay": autoplay_mode,
 	}
 
 func get_personal_best() -> Dictionary:
@@ -375,6 +379,23 @@ func set_no_fail_mode(enabled: bool) -> void:
 	no_fail_mode = enabled
 	_save_settings()
 	health_changed.emit(health, no_fail_mode, failed)
+
+func get_autoplay_mode() -> bool:
+	return autoplay_mode
+
+func set_autoplay_mode(enabled: bool) -> void:
+	if autoplay_mode == enabled:
+		return
+	if not enabled:
+		for lane in LANE_COUNT:
+			if lane_down[lane]:
+				lane_down[lane] = false
+				if playing and not paused:
+					_judge_lane_up(lane)
+	autoplay_mode = enabled
+	if autoplay_mode:
+		practice_run = true
+	autoplay_changed.emit(autoplay_mode)
 
 func get_health() -> float:
 	return health
@@ -945,7 +966,10 @@ func _process(delta: float) -> void:
 		audio_finished = false
 	if replay_playing:
 		_process_replay_events(_song_time_ms())
+	elif autoplay_mode:
+		_process_autoplay(_song_time_ms())
 	_update_note_states()
+	_update_hold_health(delta)
 	if practice_loop_start_ms >= 0.0 and practice_loop_end_ms > practice_loop_start_ms and _song_time_ms() >= practice_loop_end_ms:
 		_seek_practice_absolute(practice_loop_start_ms)
 		return
@@ -978,6 +1002,32 @@ func _process_replay_events(now_ms: float) -> void:
 				lane_down[lane] = false
 				_judge_lane_up(lane, event_time)
 		replay_cursor += 1
+
+func _process_autoplay(now_ms: float) -> void:
+	# Drive Auto through the same judgement paths as human input. This keeps
+	# hold release windows, combo, health and judgement events consistent.
+	for raw_note in notes:
+		var note: Dictionary = raw_note
+		if note.state == "pending" and now_ms >= float(note.time):
+			lane_down[note.lane] = true
+			_judge_lane_down(note.lane, float(note.time))
+	for raw_note in notes:
+		var note: Dictionary = raw_note
+		if note.state == "holding" and now_ms >= float(note.end):
+			lane_down[note.lane] = false
+			_judge_lane_up(note.lane, float(note.end))
+
+func _update_hold_health(delta: float) -> void:
+	if delta <= 0.0 or health >= MAX_HEALTH:
+		return
+	var active_holds := 0
+	var now := _song_time_ms()
+	for raw_note in notes:
+		var note: Dictionary = raw_note
+		if note.state == "holding" and now >= float(note.time) and now < float(note.end):
+			active_holds += 1
+	if active_holds > 0:
+		_change_health(delta * HOLD_HEALTH_REGEN_PER_SECOND * active_holds)
 
 func _record_calibration_tap(elapsed := -1.0) -> void:
 	if elapsed < 0.0:
