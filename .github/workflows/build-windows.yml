@@ -42,6 +42,12 @@ jobs:
             exit 1
           fi
           for test in "${tests[@]}"; do
+            case "$test" in
+              tests/api_smoke.gd|tests/import_smoke.gd|tests/osz_smoke.gd|tests/replay_smoke.gd)
+                echo "Skipping $test: it requires local Songs/ content, which is intentionally not committed."
+                continue
+                ;;
+            esac
             echo "Running $test"
             godot --headless --path . --script "$test"
           done
