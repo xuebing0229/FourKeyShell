@@ -9,21 +9,25 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-function Get-GhPath {
-    $command = Get-Command gh -ErrorAction SilentlyContinue
-    if ($null -eq $command) {
-        throw "GitHub CLI (gh) is not installed or is not on PATH."
+function Get-GitHubHeaders {
+    return @{
+        "User-Agent" = "FourKeyShell-Updater"
+        "Accept" = "application/vnd.github+json"
+        "X-GitHub-Api-Version" = "2022-11-28"
     }
-    return $command.Source
 }
 
-function Get-LatestRelease([string]$GhPath, [string]$Repository) {
-    $json = (& $GhPath api "repos/$Repository/releases?per_page=20" | Out-String)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Cannot read GitHub releases. Make sure gh is logged in and can access the private repository."
+function Get-LatestRelease([string]$Repository) {
+    $uri = "https://api.github.com/repos/$Repository/releases?per_page=20"
+    try {
+        $parsed = Invoke-RestMethod -UseBasicParsing -Uri $uri -Headers (Get-GitHubHeaders) -Method Get
+    } catch {
+        throw "Cannot read GitHub releases. Check the network connection and GitHub availability."
     }
-    $parsed = ConvertFrom-Json -InputObject ([string]$json)
+
     $releases = @($parsed | Where-Object { -not $_.draft } | Sort-Object -Property published_at -Descending)
     if ($releases.Count -eq 0) {
         throw "The repository has no usable GitHub Release yet."
@@ -35,15 +39,38 @@ function Normalize-Version([string]$Value) {
     return $Value.Trim().TrimStart("v")
 }
 
+function Download-ReleaseAsset([string]$Url, [string]$Destination) {
+    $downloaded = $false
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri $Url -Headers (Get-GitHubHeaders) -OutFile $Destination
+            $downloaded = $true
+            break
+        } catch {
+            if ($attempt -lt 3) {
+                Write-Host "Download attempt $attempt failed; retrying ..."
+                Start-Sleep -Seconds (2 * $attempt)
+            }
+        }
+    }
+
+    if (-not $downloaded) {
+        throw "Downloading the test package failed."
+    }
+}
+
 try {
-    $gh = Get-GhPath
-    $release = Get-LatestRelease $gh $Repo
+    $release = Get-LatestRelease $Repo
     $tag = [string]$release.tag_name
     $assets = @($release.assets | Where-Object { $_.name -like "FourKeyShell-test-*.zip" })
     if ($assets.Count -eq 0) {
         throw "The latest Release has no FourKeyShell test package."
     }
     $asset = $assets[0]
+    $assetUrl = [string]$asset.browser_download_url
+    if ([string]::IsNullOrWhiteSpace($assetUrl) -or -not $assetUrl.StartsWith("https://github.com/")) {
+        throw "The Release asset download URL is invalid."
+    }
 
     if ((Normalize-Version $tag) -eq (Normalize-Version $CurrentVersion)) {
         Write-Output "CURRENT|$tag|$($asset.name)"
@@ -58,6 +85,7 @@ try {
     if ([string]::IsNullOrWhiteSpace($InstallDir) -or -not (Test-Path -LiteralPath $InstallDir)) {
         throw "The install directory does not exist."
     }
+
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("FourKeyShell-update-" + [Guid]::NewGuid().ToString("N"))
     $downloadDir = Join-Path $tempRoot "download"
     $expandedDir = Join-Path $tempRoot "expanded"
@@ -65,22 +93,8 @@ try {
     New-Item -ItemType Directory -Path $expandedDir -Force | Out-Null
 
     Write-Host "Downloading $tag ..."
-    $downloaded = $false
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
-        & $gh release download $tag --repo $Repo --pattern $asset.name --dir $downloadDir --clobber
-        if ($LASTEXITCODE -eq 0) {
-            $downloaded = $true
-            break
-        }
-        if ($attempt -lt 3) {
-            Write-Host "Download attempt $attempt failed; retrying ..."
-            Start-Sleep -Seconds (2 * $attempt)
-        }
-    }
-    if (-not $downloaded) {
-        throw "Downloading the test package failed."
-    }
     $zipPath = Join-Path $downloadDir $asset.name
+    Download-ReleaseAsset $assetUrl $zipPath
     Expand-Archive -LiteralPath $zipPath -DestinationPath $expandedDir -Force
 
     if ($ProcessId -gt 0) {
@@ -97,6 +111,7 @@ try {
     if (-not (Test-Path -LiteralPath $exePath)) {
         throw "The replacement finished, but $ExecutableName was not found."
     }
+
     Write-Host "Update complete. Starting $tag ..."
     Start-Process -FilePath $exePath -WorkingDirectory $InstallDir
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
