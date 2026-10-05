@@ -1,0 +1,96 @@
+name: Build Windows test package
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Test and build Windows package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4.7.2 and export templates
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.7.2
+          use-dotnet: false
+          include-templates: true
+
+      - name: Verify Godot
+        run: godot --version
+
+      - name: Run smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tests=(tests/*_smoke.gd)
+          if (( ${#tests[@]} == 0 )); then
+            echo "No smoke tests found."
+            exit 1
+          fi
+          for test in "${tests[@]}"; do
+            echo "Running $test"
+            godot --headless --path . --script "$test"
+          done
+
+      - name: Read project version
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^config\/version="\([^"]*\)".*/\1/p' project.godot | head -n 1)"
+          if [[ -z "$version" ]]; then
+            echo "Could not read config/version from project.godot"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match project version v$version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Remove local-only export template overrides
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i '/^custom_template\/debug=/d; /^custom_template\/release=/d' export_presets.cfg
+
+      - name: Export Windows test build
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+          out="dist/FourKeyShell-test-v$version"
+          package="dist/FourKeyShell-test-v$version.zip"
+          mkdir -p "$out"
+          godot --headless --path . --export-release "Windows Desktop" "$out/FourKeyShell.exe"
+          cp CLIENT_README.txt update_test_build.ps1 "$out/"
+          (cd "$out" && zip -r "../../$package" .)
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FourKeyShell-test-${{ steps.meta.outputs.version }}
+          path: dist/FourKeyShell-test-v${{ steps.meta.outputs.version }}.zip
+          if-no-files-found: error
+
+      - name: Publish tagged prerelease
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: dist/FourKeyShell-test-v${{ steps.meta.outputs.version }}.zip

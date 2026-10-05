@@ -45,4 +45,6 @@
 
 构建测试版：双击 `构建测试版.bat`。它会生成 `dist/FourKeyShell-test-v*.zip`，测试版设置页提供“检查测试版更新”。更新器直接从公开 GitHub Release 检查和下载新版本，不需要安装 GitHub CLI 或登录 GitHub；更新时会在关闭程序后覆盖安装并重新启动。
 
+公开仓库启用了 GitHub Actions：每次推送到 `main` 或提交 Pull Request 时，会自动运行 `tests/*_smoke.gd` 并构建 Windows 测试包，结果可在 Actions 的 Artifacts 下载。发布新测试版时，先把 `project.godot` 的版本改为目标版本，再推送匹配的 `v<版本>` 标签（例如 `v0.2.0-beta.8`），工作流会自动创建预发布 Release 并上传 zip。
+
 换 UI：参照 `SHELL_API.md` 和 `SKIN_TEMPLATE.md` 替换 `skins/active_skin.tscn`，不要修改 `main.gd` 的判定逻辑。之后再次运行构建脚本即可得到新的定制 EXE。
