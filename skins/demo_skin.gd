@@ -1024,7 +1024,7 @@ func _check_for_updates() -> void:
 		response += str(item)
 	response = response.strip_edges()
 	if exit_code != 0:
-		update_status.text = "检查失败：请确认已登录 GitHub CLI"
+		update_status.text = "检查失败：请确认网络连接或 GitHub 可访问"
 		update_button.disabled = false
 		return
 	if response.begins_with("UPDATE|"):
